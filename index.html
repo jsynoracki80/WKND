@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#5B3FA6" />
+<meta name="description" content="Wyszukiwarka tras weekendowych i deklaracje kurierów – Oddział Słupsk" />
+<title>Trasy Weekendowe</title>
+
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">🚚</div>
+      <div>
+        <div class="brand-title">Trasy Weekendowe</div>
+        <div class="brand-sub">Oddział Słupsk</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="content">
+
+    <section class="card">
+      <label class="field-label" for="date-input">📅 Sobota</label>
+      <input type="date" id="date-input" />
+      <div id="date-warning" class="warning hidden">
+        ⚠️ Wybrana data nie jest sobotą — trasy weekendowe dotyczą tylko sobót.
+      </div>
+    </section>
+
+    <section class="card">
+      <label class="field-label" for="search-input">🔍 Szukaj adresu / APM / miasta / kodu</label>
+      <input type="text" id="search-input" placeholder="np. Lębork, SLU01G, 76-200…" autocomplete="off" />
+    </section>
+
+    <section id="results" class="results"></section>
+
+    <section id="empty-hint" class="empty-hint">
+      Wpisz adres, miasto, kod pocztowy lub kod APM, aby znaleźć trasę weekendową i zadeklarować kuriera.
+    </section>
+
+    <section id="declared-summary" class="card hidden">
+      <div class="summary-title">Zadeklarowani kurierzy — <span id="summary-date"></span></div>
+      <div id="declared-list"></div>
+    </section>
+
+  </main>
+
+  <footer class="footnote">
+    Dane zapisują się lokalnie na tym urządzeniu (localStorage).<br/>
+    Trasy: Trasy_WKN_CZERWIEC_2026.xlsx · Rotacja N/S/P/U/G: 18.07.2026–02.01.2027 · Kurierzy: Tabela_skuteczności.xlsx
+  </footer>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
