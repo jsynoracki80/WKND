@@ -9,24 +9,82 @@ lokalnie w przeglądarce (localStorage) — tylko na Twoim urządzeniu.
 ```
 index.html          – strona główna
 style.css           – style
-app.js              – logika (wyszukiwanie, rotacja przewoźników, deklaracje)
-manifest.json        – manifest PWA (ikona, nazwa, kolor)
-service-worker.js    – cache / działanie offline
-icons/               – ikony aplikacji
+app.js               – logika (wyszukiwanie, rotacja, deklaracje, historia)
+manifest.json         – manifest PWA (ikona, nazwa, kolor)
+service-worker.js     – cache / działanie offline
+netlify.toml          – konfiguracja Netlify (katalog funkcji)
+package.json          – zależność @netlify/blobs dla funkcji
+icons/                 – ikony aplikacji
+netlify/functions/
+  declarations.js       – API: deklaracje kurierów (GET/POST/DELETE)
+  rotation-overrides.js – API: zamiany kolejności rotacji (GET/POST/DELETE)
 data/
   addresses.json      – 285 adresów/APM z Trasy_WKN_CZERWIEC_2026.xlsx
-  couriers.json        – kurierzy pogrupowani wg przewoźnika (Tabela_skuteczności.xlsx)
-  route_carriers.json  – stały przewoźnik dla 13 tras bez rotacji
-  rotation.json        – grafik rotacji dla tras N/S/P/U/G (18.07.2026–02.01.2027)
+  couriers.json         – kurierzy pogrupowani wg przewoźnika (Tabela_skuteczności.xlsx)
+  route_carriers.json   – stały przewoźnik dla tras bez rotacji
+  rotation.json          – bazowy grafik rotacji N/S/P/U/G (18.07.2026–02.01.2027)
+  rotation_pools.json    – pula przewoźników do ręcznej zamiany rotacji
 ```
 
-## Wdrożenie na Netlify (jak Rejonizacja)
+## Dane: teraz trwałe i wspólne (Netlify Blobs)
 
-1. Załóż nowe repo na GitHubie (np. `trasy-weekendowe`).
-2. Wrzuć wszystkie pliki z tego folderu do repo (zachowując strukturę).
-3. W Netlify: „Add new site” → „Import an existing project” → wybierz repo.
-   Build command: (puste), Publish directory: `.` (root repo).
-4. Po wdrożeniu strona będzie dostępna pod adresem `*.netlify.app`.
+Deklaracje kurierów i zamiany rotacji **nie są już zapisywane w
+przeglądarce (localStorage)** — trafiają do Netlify Blobs przez dwie
+funkcje serwerowe. To oznacza:
+
+- dane przetrwają zamknięcie aplikacji, odświeżenie, redeploy strony,
+  wyczyszczenie danych przeglądarki,
+- są dostępne z każdego urządzenia (telefon, komputer) pod tym samym
+  adresem,
+- **wymaga wdrożenia na Netlify z aktywnymi Functions** — nie zadziała
+  z lokalnego `python -m http.server` ani z otwarcia pliku bezpośrednio.
+
+## Wdrożenie na Netlify
+
+1. Wrzuć całą zawartość folderu `weekend-app/` do repo (zachowując
+   strukturę, łącznie z `netlify/`, `netlify.toml`, `package.json`).
+2. W Netlify: Site configuration → Build & deploy → Build settings:
+   - **Base directory**: `weekend-app` (bez spacji!)
+   - **Publish directory**: `weekend-app`
+   - **Functions directory**: `weekend-app/netlify/functions`
+     (Netlify powinien to też wyczytać automatycznie z `netlify.toml`)
+3. **Ustaw hasło do zapisu** — Site configuration → Environment
+   variables → Add a variable:
+   - Key: `WEEKEND_APP_PASSWORD`
+   - Value: dowolne hasło, które będziesz wpisywać w apce
+     (sekcja „🔒 Ustawienia”), żeby móc zapisywać/usuwać deklaracje
+4. Trigger deploy → Clear cache and deploy site.
+5. Po wdrożeniu Netlify automatycznie instaluje `@netlify/blobs`
+   (z `package.json`) i buduje funkcje — nie trzeba nic dodatkowo
+   konfigurować, magazyn Blobs jest przypisany do strony automatycznie.
+
+Jeśli backend jest niedostępny (np. jeszcze nie wdrożony), aplikacja
+nadal działa do przeglądania tras i wyszukiwania adresów — tylko
+zapisywanie/usuwanie deklaracji i zamian rotacji jest wtedy
+zablokowane, z czerwonym ostrzeżeniem w interfejsie.
+
+## Nowości w tej wersji
+
+- **Kolejność w karcie trasy**: po rozwinięciu trasy najpierw widać
+  zwijane podmenu „👤 Kurier” (otwarte domyślnie, dopóki nie ma
+  deklaracji), potem „🔁 Zamiana kolejności rotacji” (tylko trasy
+  N/S/P/U/G), na końcu „📍 Przykładowe adresy”.
+- **Historia** — osobna sekcja niżej na stronie, pokazuje wszystkie
+  minione soboty z zapisanymi deklaracjami. Rozwijalna karta na
+  sobotę pokazuje listę tras+kurierów, z przyciskiem „Otwórz tę
+  sobotę w edytorze”, żeby np. skorygować wpis z przeszłości.
+- **Hasło do zapisu** — sekcja „🔒 Ustawienia” na górze strony,
+  zwijana. Wpisane raz zapamiętuje się na urządzeniu (localStorage) —
+  potrzebne tylko przy zapisie/usuwaniu, nie przy przeglądaniu.
+- **Wyszukiwanie głosowe** — przycisk 🎤 obok pola wyszukiwania
+  adresu. Działa przez wbudowane w przeglądarkę rozpoznawanie mowy
+  (Web Speech API, język polski) — najlepiej wspierane w Chrome
+  (w tym Chrome na Androidzie). Jeśli w wypowiedzi nie pada nazwa
+  żadnego znanego miasta z bazy, aplikacja automatycznie dopisuje
+  „Słupsk” do zapytania — więc powiedzenie samej ulicy i numeru
+  (np. „Łotewska 2”) trafi we właściwy adres w Słupsku, nawet gdy
+  taka sama nazwa ulicy istnieje też w innej miejscowości.
+
 
 ## Instalacja na Androidzie (jako PWA)
 

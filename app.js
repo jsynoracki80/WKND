@@ -1,6 +1,8 @@
 // =============================================================
 // Trasy Weekendowe — logika aplikacji
 // © 2026 Jacek Synoracki — Oddział Słupsk
+// Dane deklaracji/rotacji: Netlify Functions + Blobs (trwałe,
+// wspólne dla wszystkich urządzeń).
 // =============================================================
 
 const ALL_ROUTES = ["A","B","C","D","F","G","J","K","M","N","P","Q","S","T","U","V","W","X"];
@@ -9,8 +11,8 @@ const MERGED_LABELS = {
   F: "DOMAROS (Czesław + Sebastian)",
 };
 
-const DECL_STORAGE_KEY = "trasy_weekendowe_deklaracje_v1";
-const ROT_OVERRIDE_KEY = "trasy_weekendowe_rotacja_override_v1";
+const API_BASE = "/.netlify/functions";
+const PASSWORD_STORAGE_KEY = "trasy_weekendowe_haslo_v1";
 
 let COURIERS_BY_CARRIER = {};
 let ADDRESSES = [];
@@ -19,24 +21,54 @@ let ROTATION = {};
 let ROTATION_POOLS = {};
 let ADDRESSES_BY_ROUTE = {};
 let FLAT_COURIERS = [];
+let KNOWN_CITIES = [];
+const DEFAULT_CITY = "Słupsk";
 
-const expandedRoutes = new Set();
-const swapSearchOpen = new Set(); // route keys where "inny kurier" search box is open
+let DECLARATIONS = {};       // route__date -> {courierNr, courierName, carrier, savedAt}
+let ROTATION_OVERRIDES = {}; // route__date -> {carrier, savedAt}
+let PASSWORD = localStorage.getItem(PASSWORD_STORAGE_KEY) || "";
+let BACKEND_OK = true;
+
+const expandedRoutes = new Set();   // top-level route card open/closed
+const sectionState = new Map();     // "route::section" -> bool (overrides default)
+const swapSearchOpen = new Set();   // route__date keys where "inny kurier" search is open
 
 const dateInput = document.getElementById("date-input");
 const dateWarning = document.getElementById("date-warning");
 const searchInput = document.getElementById("search-input");
+const micBtn = document.getElementById("mic-btn");
+const voiceFeedback = document.getElementById("voice-feedback");
+const voiceUnsupported = document.getElementById("voice-unsupported");
 const resultsEl = document.getElementById("results");
 const allRoutesEl = document.getElementById("all-routes");
+const historyEl = document.getElementById("history");
+const historyEmptyEl = document.getElementById("history-empty");
 const declaredSummary = document.getElementById("declared-summary");
 const declaredListEl = document.getElementById("declared-list");
 const summaryDateEl = document.getElementById("summary-date");
+const loadingBanner = document.getElementById("loading-banner");
+const syncErrorBanner = document.getElementById("sync-error-banner");
+const settingsToggle = document.getElementById("settings-toggle");
+const settingsBody = document.getElementById("settings-body");
+const settingsChevron = document.getElementById("settings-chevron");
+const passwordInput = document.getElementById("password-input");
 
 // -------------------------------------------------------------
 // Inicjalizacja
 // -------------------------------------------------------------
 
 async function init() {
+  passwordInput.value = PASSWORD;
+  passwordInput.addEventListener("change", () => {
+    PASSWORD = passwordInput.value;
+    localStorage.setItem(PASSWORD_STORAGE_KEY, PASSWORD);
+  });
+
+  settingsToggle.addEventListener("click", () => {
+    settingsBody.classList.toggle("hidden");
+    settingsChevron.classList.toggle("open");
+  });
+
   const [couriers, addresses, routeCarriers, rotation, rotationPools] = await Promise.all([
     fetchJSON("data/couriers.json"),
     fetchJSON("data/addresses.json"),
@@ -58,6 +90,7 @@ async function init() {
   });
 
   FLAT_COURIERS = buildFlatCourierIndex();
+  KNOWN_CITIES = buildKnownCities();
 
   dateInput.value = nextSaturdayISO();
   dateInput.addEventListener("change", () => {
@@ -66,8 +99,12 @@ async function init() {
   });
 
   searchInput.addEventListener("input", () => renderSearchResults());
+  setupVoiceSearch();
+
+  await refreshFromBackend();
 
   validateDate();
+  loadingBanner.classList.add("hidden");
   renderAll();
 
   if ("serviceWorker" in navigator) {
@@ -95,8 +132,148 @@ function buildFlatCourierIndex() {
   return list;
 }
 
+// -------------------------------------------------------------
+// Wyszukiwanie glosowe
+// -------------------------------------------------------------
+
+function normalizeText(s) {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, ""); // usuwa polskie znaki diakrytyczne do porownania
+}
+
+function buildKnownCities() {
+  const set = new Set();
+  ADDRESSES.forEach((a) => {
+    if (a.miasto) set.add(a.miasto.trim());
+  });
+  return [...set];
+}
+
+function transcriptMentionsCity(transcript) {
+  const norm = normalizeText(transcript);
+  return KNOWN_CITIES.some((city) => norm.includes(normalizeText(city)));
+}
+
+function setupVoiceSearch() {
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SpeechRecognitionCtor) {
+    micBtn.classList.add("hidden");
+    voiceUnsupported.classList.remove("hidden");
+    return;
+  }
+
+  const recognition = new SpeechRecognitionCtor();
+  recognition.lang = "pl-PL";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  let listening = false;
+
+  recognition.addEventListener("start", () => {
+    listening = true;
+    micBtn.classList.add("listening");
+    voiceFeedback.classList.remove("hidden");
+    voiceFeedback.textContent = "🎤 Słucham…";
+  });
+
+  recognition.addEventListener("end", () => {
+    listening = false;
+    micBtn.classList.remove("listening");
+  });
+
+  recognition.addEventListener("error", (e) => {
+    listening = false;
+    micBtn.classList.remove("listening");
+    voiceFeedback.textContent = "⚠️ Nie udało się rozpoznać mowy (" + e.error + "). Spróbuj ponownie.";
+  });
+
+  recognition.addEventListener("result", (event) => {
+    let transcript = (event.results[0][0].transcript || "").trim();
+    if (!transcript) return;
+
+    const hadCity = transcriptMentionsCity(transcript);
+    if (!hadCity) {
+      transcript = `${transcript} ${DEFAULT_CITY}`;
+    }
+
+    searchInput.value = transcript;
+    renderSearchResults();
+
+    voiceFeedback.textContent = hadCity
+      ? `🎤 Rozpoznano: „${transcript}”`
+      : `🎤 Rozpoznano: „${transcript}” (nie podano miasta — domyślnie dodano „${DEFAULT_CITY}”)`;
+  });
+
+  micBtn.addEventListener("click", () => {
+    if (listening) {
+      recognition.stop();
+      return;
+    }
+    try {
+      recognition.start();
+    } catch {
+      // recognition already running - ignore
+    }
+  });
+}
+
+// -------------------------------------------------------------
+// Backend (Netlify Functions + Blobs)
+// -------------------------------------------------------------
+
+async function refreshFromBackend() {
+  try {
+    const [decl, rot] = await Promise.all([
+      fetch(`${API_BASE}/declarations`).then((r) => r.json()),
+      fetch(`${API_BASE}/rotation-overrides`).then((r) => r.json()),
+    ]);
+    DECLARATIONS = decl && typeof decl === "object" ? decl : {};
+    ROTATION_OVERRIDES = rot && typeof rot === "object" ? rot : {};
+    BACKEND_OK = true;
+    syncErrorBanner.classList.add("hidden");
+  } catch (err) {
+    BACKEND_OK = false;
+    showSyncError("Nie udało się połączyć z serwerem zapisu. Deklaracje mogą się nie zapisać — sprawdź połączenie i spróbuj ponownie.");
+  }
+}
+
+function showSyncError(msg) {
+  syncErrorBanner.textContent = "⚠️ " + msg;
+  syncErrorBanner.classList.remove("hidden");
+}
+
+async function apiPost(path, body) {
+  const res = await fetch(`${API_BASE}/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, password: PASSWORD }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Błąd zapisu (${res.status})`);
+  }
+  return data;
+}
+
+async function apiDelete(path, body) {
+  const res = await fetch(`${API_BASE}/${path}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, password: PASSWORD }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Błąd usuwania (${res.status})`);
+  }
+  return data;
+}
+
 function renderAll() {
   renderRoutesList();
+  renderHistory();
   renderSearchResults();
   renderSummary();
 }
@@ -121,6 +298,10 @@ function toISO(dt) {
   return `${y}-${m}-${d}`;
 }
 
+function todayISO() {
+  return toISO(new Date());
+}
+
 function isSaturday(iso) {
   const dt = new Date(iso + "T00:00:00");
   return dt.getDay() === 6;
@@ -140,37 +321,23 @@ function validateDate() {
 // Rotacja: harmonogram + reczna zamiana kolejnosci
 // -------------------------------------------------------------
 
-function loadRotationOverrides() {
-  try {
-    return JSON.parse(localStorage.getItem(ROT_OVERRIDE_KEY)) || {};
-  } catch {
-    return {};
-  }
-}
-
-function saveRotationOverrides(data) {
-  localStorage.setItem(ROT_OVERRIDE_KEY, JSON.stringify(data));
-}
-
 function rotKey(route, dateISO) {
   return `${route}__${dateISO}`;
 }
 
 function getRotationOverride(route, dateISO) {
-  const data = loadRotationOverrides();
-  return data[rotKey(route, dateISO)] || null;
+  const entry = ROTATION_OVERRIDES[rotKey(route, dateISO)];
+  return entry ? entry.carrier : null;
 }
 
-function setRotationOverride(route, dateISO, carrier) {
-  const data = loadRotationOverrides();
-  data[rotKey(route, dateISO)] = carrier;
-  saveRotationOverrides(data);
+async function setRotationOverride(route, dateISO, carrier) {
+  const data = await apiPost("rotation-overrides", { route, date: dateISO, carrier });
+  ROTATION_OVERRIDES = data.data || ROTATION_OVERRIDES;
 }
 
-function clearRotationOverride(route, dateISO) {
-  const data = loadRotationOverrides();
-  delete data[rotKey(route, dateISO)];
-  saveRotationOverrides(data);
+async function clearRotationOverride(route, dateISO) {
+  const data = await apiDelete("rotation-overrides", { route, date: dateISO });
+  ROTATION_OVERRIDES = data.data || ROTATION_OVERRIDES;
 }
 
 function effectiveCarrierInfo(route, dateISO) {
@@ -212,37 +379,60 @@ function couriersForCarriers(carrierNames) {
 }
 
 // -------------------------------------------------------------
-// Deklaracje kuriera (localStorage)
+// Deklaracje kuriera (backend)
 // -------------------------------------------------------------
-
-function loadDeclarations() {
-  try {
-    return JSON.parse(localStorage.getItem(DECL_STORAGE_KEY)) || {};
-  } catch {
-    return {};
-  }
-}
-
-function saveDeclarations(decl) {
-  localStorage.setItem(DECL_STORAGE_KEY, JSON.stringify(decl));
-}
 
 function declKey(route, dateISO) {
   return `${route}__${dateISO}`;
 }
 
-function declareCourier(route, dateISO, courier) {
-  const decl = loadDeclarations();
-  decl[declKey(route, dateISO)] = courier;
-  saveDeclarations(decl);
-  renderAll();
+async function declareCourier(route, dateISO, courier) {
+  const data = await apiPost("declarations", { route, date: dateISO, ...courier });
+  DECLARATIONS = data.data || DECLARATIONS;
 }
 
-function removeDeclaration(route, dateISO) {
-  const decl = loadDeclarations();
-  delete decl[declKey(route, dateISO)];
-  saveDeclarations(decl);
-  renderAll();
+async function removeDeclaration(route, dateISO) {
+  const data = await apiDelete("declarations", { route, date: dateISO });
+  DECLARATIONS = data.data || DECLARATIONS;
+}
+
+// -------------------------------------------------------------
+// Sekcje (accordion) — stan otwarcia
+// -------------------------------------------------------------
+
+function isSectionOpen(key, defaultVal) {
+  return sectionState.has(key) ? sectionState.get(key) : defaultVal;
+}
+
+function toggleSection(key, defaultVal) {
+  sectionState.set(key, !isSectionOpen(key, defaultVal));
+}
+
+function buildAccordion(key, titleHTML, summaryText, defaultOpen, bodyBuilderFn) {
+  const open = isSectionOpen(key, defaultOpen);
+
+  const acc = document.createElement("div");
+  acc.className = "accordion";
+
+  const head = document.createElement("div");
+  head.className = "accordion-head";
+  head.innerHTML = `
+    <span class="accordion-title">${titleHTML}</span>
+    <span class="accordion-summary">${escapeHTML(summaryText || "")}</span>
+    <span class="chevron ${open ? "open" : ""}">▶</span>
+  `;
+  head.addEventListener("click", () => {
+    toggleSection(key, defaultOpen);
+    renderRoutesList();
+  });
+
+  const body = document.createElement("div");
+  body.className = `accordion-body ${open ? "" : "hidden"}`;
+  if (open) body.appendChild(bodyBuilderFn());
+
+  acc.appendChild(head);
+  acc.appendChild(body);
+  return acc;
 }
 
 // -------------------------------------------------------------
@@ -251,18 +441,17 @@ function removeDeclaration(route, dateISO) {
 
 function renderRoutesList() {
   const dateISO = dateInput.value;
-  const decl = loadDeclarations();
   allRoutesEl.innerHTML = "";
 
   ALL_ROUTES.forEach((route) => {
-    allRoutesEl.appendChild(buildRouteCard(route, dateISO, decl));
+    allRoutesEl.appendChild(buildRouteCard(route, dateISO));
   });
 }
 
-function buildRouteCard(route, dateISO, decl) {
+function buildRouteCard(route, dateISO) {
   const info = effectiveCarrierInfo(route, dateISO);
   const carrierLabel = carrierDisplayName(route, info.carriers);
-  const declared = decl[declKey(route, dateISO)];
+  const declared = DECLARATIONS[declKey(route, dateISO)];
   const isOpen = expandedRoutes.has(route);
 
   const card = document.createElement("div");
@@ -298,71 +487,99 @@ function buildRouteCard(route, dateISO, decl) {
 
 function buildRouteCardBody(route, dateISO, info, declared) {
   const wrap = document.createElement("div");
+  wrap.style.paddingTop = "10px";
 
+  // === 1. KURIER — pierwsze, najważniejsze ===
+  const courierKey = `${route}::courier`;
+  const courierSummary = declared ? declared.courierName : "brak deklaracji";
+  wrap.appendChild(
+    buildAccordion(courierKey, "👤 Kurier na tę trasę", courierSummary, !declared, () => {
+      const box = document.createElement("div");
+      renderCourierSlot(box, route, dateISO, info, declared);
+      return box;
+    })
+  );
+
+  // === 2. ROTACJA (tylko trasy N/S/P/U/G) ===
+  if (info.isRotating) {
+    const rotKeyName = `${route}::rotation`;
+    const rotSummary = info.overridden ? "zamieniono" : "wg grafiku";
+    wrap.appendChild(
+      buildAccordion(rotKeyName, "🔁 Zamiana kolejności rotacji", rotSummary, false, () => {
+        return buildRotationBody(route, dateISO, info);
+      })
+    );
+  }
+
+  // === 3. ADRESY — najmniej istotne, na końcu ===
   const addrs = ADDRESSES_BY_ROUTE[route] || [];
   if (addrs.length) {
-    const addrSection = document.createElement("div");
-    addrSection.className = "subsection";
-    addrSection.innerHTML = `<div class="subsection-label">Przykladowe adresy (${addrs.length})</div>`;
-    const chipWrap = document.createElement("div");
-    addrs.slice(0, 6).forEach((a) => {
-      const chip = document.createElement("span");
-      chip.className = "address-chip";
-      chip.textContent = `${a.adres || a.apm}, ${a.miasto}`;
-      chipWrap.appendChild(chip);
-    });
-    addrSection.appendChild(chipWrap);
-    wrap.appendChild(addrSection);
+    const addrKey = `${route}::addresses`;
+    wrap.appendChild(
+      buildAccordion(addrKey, "📍 Przykładowe adresy", `${addrs.length} adresów`, false, () => {
+        const chipWrap = document.createElement("div");
+        addrs.slice(0, 8).forEach((a) => {
+          const chip = document.createElement("span");
+          chip.className = "address-chip";
+          chip.textContent = `${a.adres || a.apm}, ${a.miasto}`;
+          chipWrap.appendChild(chip);
+        });
+        return chipWrap;
+      })
+    );
   }
 
-  if (info.isRotating) {
-    const pool = ROTATION_POOLS[route] || [];
-    const rotSection = document.createElement("div");
-    rotSection.className = "subsection";
-    rotSection.innerHTML = `<div class="subsection-label">Przewoznik na te sobote (rotacja)</div>`;
+  return wrap;
+}
 
-    const select = document.createElement("select");
-    const autoOpt = document.createElement("option");
-    autoOpt.value = "";
-    autoOpt.textContent = "Wg grafiku rotacji (domyslnie)";
-    select.appendChild(autoOpt);
-    pool.forEach((c) => {
-      const opt = document.createElement("option");
-      opt.value = c;
-      opt.textContent = c;
-      select.appendChild(opt);
-    });
-    select.value = info.overridden ? info.carriers[0] : "";
+function buildRotationBody(route, dateISO, info) {
+  const wrap = document.createElement("div");
+  const pool = ROTATION_POOLS[route] || [];
 
-    select.addEventListener("change", (e) => {
-      if (e.target.value === "") {
-        clearRotationOverride(route, dateISO);
+  const select = document.createElement("select");
+  const autoOpt = document.createElement("option");
+  autoOpt.value = "";
+  autoOpt.textContent = "Wg grafiku rotacji (domyślnie)";
+  select.appendChild(autoOpt);
+  pool.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    select.appendChild(opt);
+  });
+  select.value = info.overridden ? info.carriers[0] : "";
+  select.disabled = !BACKEND_OK;
+
+  select.addEventListener("change", async (e) => {
+    const val = e.target.value;
+    select.disabled = true;
+    try {
+      if (val === "") {
+        await clearRotationOverride(route, dateISO);
       } else {
-        setRotationOverride(route, dateISO, e.target.value);
+        await setRotationOverride(route, dateISO, val);
       }
       renderAll();
-    });
-
-    rotSection.appendChild(select);
-
-    if (info.overridden) {
-      const note = document.createElement("div");
-      note.style.cssText = "font-size:11.5px;color:#9A5B12;margin-top:5px;";
-      note.textContent = "Zamieniono kolejnosc rotacji recznie dla tej soboty.";
-      rotSection.appendChild(note);
+    } catch (err) {
+      alert(err.message || "Nie udało się zapisać zamiany rotacji.");
+      select.disabled = false;
     }
-    wrap.appendChild(rotSection);
+  });
+
+  wrap.appendChild(select);
+
+  if (info.overridden) {
+    const note = document.createElement("div");
+    note.style.cssText = "font-size:11.5px;color:#9A5B12;margin-top:5px;";
+    note.textContent = "Zamieniono kolejność rotacji ręcznie dla tej soboty.";
+    wrap.appendChild(note);
   }
-
-  const courierSection = document.createElement("div");
-  courierSection.className = "subsection";
-  courierSection.innerHTML = `<div class="subsection-label">Kurier na te trase</div>`;
-  const slot = document.createElement("div");
-  courierSection.appendChild(slot);
-  wrap.appendChild(courierSection);
-
-  renderCourierSlot(slot, route, dateISO, info, declared);
-
+  if (!BACKEND_OK) {
+    const note = document.createElement("div");
+    note.style.cssText = "font-size:11px;color:#B3261E;margin-top:5px;";
+    note.textContent = "Brak połączenia z serwerem — zamiana rotacji chwilowo niedostępna.";
+    wrap.appendChild(note);
+  }
   return wrap;
 }
 
@@ -379,16 +596,33 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
     const btn = document.createElement("button");
     btn.className = "remove-btn";
     btn.textContent = "✕";
-    btn.addEventListener("click", () => removeDeclaration(route, dateISO));
+    btn.disabled = !BACKEND_OK;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await removeDeclaration(route, dateISO);
+        renderAll();
+      } catch (err) {
+        alert(err.message || "Nie udało się usunąć deklaracji.");
+        btn.disabled = false;
+      }
+    });
     box.appendChild(btn);
     slot.appendChild(box);
     if (isSwap) {
       const note = document.createElement("div");
       note.style.cssText = "font-size:11px;color:#6A2E9E;margin-top:5px;";
-      note.textContent = `Normalnie ta trasa jest obslugiwana przez: ${carrierDisplayName(route, info.carriers)}.`;
+      note.textContent = `Normalnie ta trasa jest obsługiwana przez: ${carrierDisplayName(route, info.carriers)}.`;
       slot.appendChild(note);
     }
     return;
+  }
+
+  if (!BACKEND_OK) {
+    const warn = document.createElement("div");
+    warn.className = "warning danger";
+    warn.textContent = "⚠️ Brak połączenia z serwerem zapisu — deklaracje chwilowo niedostępne.";
+    slot.appendChild(warn);
   }
 
   const quickOptions = couriersForCarriers(info.carriers);
@@ -396,11 +630,12 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
   const isSwapOpen = swapSearchOpen.has(swapKey);
 
   const quickSelect = document.createElement("select");
+  quickSelect.disabled = !BACKEND_OK;
   const emptyOpt = document.createElement("option");
   emptyOpt.value = "";
   emptyOpt.disabled = true;
   emptyOpt.selected = true;
-  emptyOpt.textContent = quickOptions.length ? "Wybierz kuriera przewoznika..." : "Brak kurierow tego przewoznika w bazie";
+  emptyOpt.textContent = quickOptions.length ? "Wybierz kuriera przewoźnika…" : "Brak kurierów tego przewoźnika w bazie";
   quickSelect.appendChild(emptyOpt);
   quickOptions.forEach((o) => {
     const opt = document.createElement("option");
@@ -408,21 +643,27 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
     opt.textContent = `${o.imie} ${o.nazwisko} (${o.nr})`;
     quickSelect.appendChild(opt);
   });
-  quickSelect.addEventListener("change", (e) => {
+  quickSelect.addEventListener("change", async (e) => {
     const opt = quickOptions.find((o) => o.nr === e.target.value);
-    if (opt) {
-      declareCourier(route, dateISO, {
+    if (!opt) return;
+    quickSelect.disabled = true;
+    try {
+      await declareCourier(route, dateISO, {
         courierNr: opt.nr,
         courierName: `${opt.imie} ${opt.nazwisko}`,
         carrier: opt.carrier,
       });
+      renderAll();
+    } catch (err) {
+      alert(err.message || "Nie udało się zapisać deklaracji.");
+      quickSelect.disabled = false;
     }
   });
   slot.appendChild(quickSelect);
 
   const toggle = document.createElement("button");
   toggle.className = "link-btn";
-  toggle.textContent = isSwapOpen ? "Zamknij zamiane" : "Inny kurier (zamiana z innej trasy)";
+  toggle.textContent = isSwapOpen ? "Zamknij zamianę" : "Inny kurier (zamiana z innej trasy)";
   toggle.style.marginTop = "8px";
   toggle.addEventListener("click", () => {
     if (isSwapOpen) swapSearchOpen.delete(swapKey);
@@ -437,7 +678,7 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
 
     const searchBox = document.createElement("input");
     searchBox.type = "text";
-    searchBox.placeholder = "Szukaj po nazwisku lub numerze kuriera...";
+    searchBox.placeholder = "Szukaj po nazwisku lub numerze kuriera…";
     swapWrap.appendChild(searchBox);
 
     const resultsBox = document.createElement("div");
@@ -458,7 +699,7 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
       if (matches.length === 0) {
         const none = document.createElement("div");
         none.style.cssText = "font-size:12px;color:#9186A0;padding:6px 0;";
-        none.textContent = "Brak wynikow.";
+        none.textContent = "Brak wyników.";
         resultsBox.appendChild(none);
         return;
       }
@@ -468,55 +709,130 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
         row.style.cssText =
           "padding:8px 9px; border-radius:8px; font-size:13px; cursor:pointer; border:1px solid #F0ECF6; margin-bottom:5px;";
         row.innerHTML = `<strong>${escapeHTML(m.imie)} ${escapeHTML(m.nazwisko)}</strong> (${escapeHTML(m.nr)})<br><span style="color:#9186A0;font-size:11.5px;">${escapeHTML(m.carrier)}</span>`;
-        row.addEventListener("click", () => {
-          declareCourier(route, dateISO, {
-            courierNr: m.nr,
-            courierName: `${m.imie} ${m.nazwisko}`,
-            carrier: m.carrier,
-          });
-          swapSearchOpen.delete(swapKey);
+        row.addEventListener("click", async () => {
+          try {
+            await declareCourier(route, dateISO, {
+              courierNr: m.nr,
+              courierName: `${m.imie} ${m.nazwisko}`,
+              carrier: m.carrier,
+            });
+            swapSearchOpen.delete(swapKey);
+            renderAll();
+          } catch (err) {
+            alert(err.message || "Nie udało się zapisać deklaracji.");
+          }
         });
         resultsBox.appendChild(row);
       });
     }
 
     searchBox.addEventListener("input", renderSwapResults);
+    swapWrap.style.display = BACKEND_OK ? "" : "none";
     slot.appendChild(swapWrap);
   }
+}
+
+// -------------------------------------------------------------
+// Render: Historia (minione soboty)
+// -------------------------------------------------------------
+
+function renderHistory() {
+  const today = todayISO();
+  const byDate = {};
+
+  Object.entries(DECLARATIONS).forEach(([key, val]) => {
+    const [route, date] = key.split("__");
+    if (date >= today) return; // tylko minione
+    if (!byDate[date]) byDate[date] = [];
+    byDate[date].push({ route, ...val });
+  });
+
+  const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
+
+  historyEl.innerHTML = "";
+  historyEmptyEl.classList.toggle("hidden", dates.length > 0);
+
+  dates.forEach((date) => {
+    const entries = byDate[date].sort((a, b) => a.route.localeCompare(b.route));
+    const key = `hist::${date}`;
+    const isOpen = sectionState.get(key) || false;
+
+    const card = document.createElement("div");
+    card.className = "history-card";
+
+    const head = document.createElement("div");
+    head.className = "history-head";
+    head.innerHTML = `
+      <div>
+        <div class="history-date">Sobota ${fmtDatePL(date)}</div>
+        <div class="history-count">${entries.length} ${entries.length === 1 ? "trasa" : "tras"} z kurierem</div>
+      </div>
+      <span class="chevron ${isOpen ? "open" : ""}">▶</span>
+    `;
+    head.addEventListener("click", () => {
+      sectionState.set(key, !isOpen);
+      renderHistory();
+    });
+
+    const body = document.createElement("div");
+    body.className = `history-body ${isOpen ? "" : "hidden"}`;
+    if (isOpen) {
+      entries.forEach((e) => {
+        const row = document.createElement("div");
+        row.className = "history-row";
+        row.innerHTML = `<span><strong style="color:var(--purple)">Trasa ${escapeHTML(e.route)}</strong> — ${escapeHTML(e.courierName)} (${escapeHTML(e.courierNr)})</span>`;
+        body.appendChild(row);
+      });
+
+      const openBtn = document.createElement("button");
+      openBtn.className = "history-open-btn";
+      openBtn.textContent = `Otwórz tę sobotę w edytorze ↑`;
+      openBtn.addEventListener("click", () => {
+        dateInput.value = date;
+        validateDate();
+        renderAll();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+      body.appendChild(openBtn);
+    }
+
+    card.appendChild(head);
+    card.appendChild(body);
+    historyEl.appendChild(card);
+  });
 }
 
 // -------------------------------------------------------------
 // Render: wyszukiwanie adresow (skrot do trasy)
 // -------------------------------------------------------------
 
+function addressMatchesQuery(a, query) {
+  const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return false;
+  const haystack = `${a.apm} ${a.adres || ""} ${a.miasto || ""} ${a.kod || ""}`.toLowerCase();
+  return words.every((w) => haystack.includes(w));
+}
+
 function renderSearchResults() {
   const q = searchInput.value.trim().toLowerCase();
   resultsEl.innerHTML = "";
   if (!q) return;
 
-  const matches = ADDRESSES.filter((a) => {
-    return (
-      a.apm.toLowerCase().includes(q) ||
-      (a.adres || "").toLowerCase().includes(q) ||
-      (a.miasto || "").toLowerCase().includes(q) ||
-      (a.kod || "").toLowerCase().includes(q)
-    );
-  }).slice(0, 30);
+  const matches = ADDRESSES.filter((a) => addressMatchesQuery(a, q)).slice(0, 30);
 
   if (matches.length === 0) {
     const div = document.createElement("div");
     div.className = "empty-hint";
-    div.textContent = `Brak wynikow dla „${searchInput.value.trim()}".`;
+    div.textContent = `Brak wyników dla „${searchInput.value.trim()}”.`;
     resultsEl.appendChild(div);
     return;
   }
 
   const dateISO = dateInput.value;
-  const decl = loadDeclarations();
 
   matches.forEach((r) => {
     const info = effectiveCarrierInfo(r.trasa, dateISO);
-    const declared = decl[declKey(r.trasa, dateISO)];
+    const declared = DECLARATIONS[declKey(r.trasa, dateISO)];
 
     const card = document.createElement("div");
     card.className = "result-card";
@@ -528,12 +844,12 @@ function renderSearchResults() {
       <div class="result-meta">📍 ${escapeHTML(r.miasto || "")} ${escapeHTML(r.kod || "")} · APM ${escapeHTML(r.apm)}</div>
       <div class="result-body">
         <div class="carrier-line">
-          Przewoznik: <strong>${escapeHTML(carrierDisplayName(r.trasa, info.carriers))}</strong>
+          Przewoźnik: <strong>${escapeHTML(carrierDisplayName(r.trasa, info.carriers))}</strong>
         </div>
         <div class="carrier-line">
           Kurier: ${declared ? "✅ " + escapeHTML(declared.courierName) : "brak deklaracji"}
         </div>
-        <a href="#route-${r.trasa}" class="jump-link">Otworz trase ${r.trasa} ↑</a>
+        <a href="#route-${r.trasa}" class="jump-link">Otwórz trasę ${r.trasa} ↑</a>
       </div>
     `;
     card.querySelector(".jump-link").addEventListener("click", (e) => {
@@ -554,13 +870,12 @@ function renderSearchResults() {
 }
 
 // -------------------------------------------------------------
-// Render: podsumowanie zadeklarowanych kurierow
+// Render: podsumowanie zadeklarowanych kurierow (biezaca data)
 // -------------------------------------------------------------
 
 function renderSummary() {
   const dateISO = dateInput.value;
-  const decl = loadDeclarations();
-  const entries = Object.entries(decl)
+  const entries = Object.entries(DECLARATIONS)
     .filter(([k]) => k.endsWith("__" + dateISO))
     .map(([k, v]) => ({ route: k.split("__")[0], ...v }));
 
@@ -583,8 +898,15 @@ function renderSummary() {
       `;
       const btn = document.createElement("button");
       btn.className = "remove-btn";
+      btn.addEventListener("click", async () => {
+        try {
+          await removeDeclaration(d.route, dateISO);
+          renderAll();
+        } catch (err) {
+          alert(err.message || "Nie udało się usunąć deklaracji.");
+        }
+      });
       btn.textContent = "✕";
-      btn.addEventListener("click", () => removeDeclaration(d.route, dateISO));
       row.appendChild(btn);
       declaredListEl.appendChild(row);
     });

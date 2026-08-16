@@ -28,11 +28,25 @@
 
   <main class="content">
 
+    <div id="loading-banner" class="loading-banner">⏳ Ładowanie danych…</div>
+    <div id="sync-error-banner" class="sync-error hidden"></div>
+
     <section class="card">
       <label class="field-label" for="date-input">📅 Sobota</label>
       <input type="date" id="date-input" />
       <div id="date-warning" class="warning hidden">
         ⚠️ Wybrana data nie jest sobotą — trasy weekendowe dotyczą tylko sobót.
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="settings-head" id="settings-toggle">
+        <span class="field-label" style="margin-bottom:0;">🔒 Ustawienia — hasło do zapisu</span>
+        <span class="chevron" id="settings-chevron">▶</span>
+      </div>
+      <div id="settings-body" class="settings-body hidden">
+        <input type="password" id="password-input" placeholder="Hasło do zapisu deklaracji" />
+        <div class="settings-note">Hasło ustawia się raz na urządzeniu — potrzebne tylko do zapisywania/zmiany deklaracji, nie do przeglądania.</div>
       </div>
     </section>
 
@@ -44,10 +58,21 @@
     <section class="section-heading">🗺️ Wszystkie trasy</section>
     <section id="all-routes" class="results"></section>
 
+    <section class="section-heading">📜 Historia (minione soboty)</section>
+    <section id="history" class="results"></section>
+    <div id="history-empty" class="empty-hint hidden">Brak zapisanych deklaracji z minionych sobót.</div>
+
     <section class="section-heading">🔍 Szukaj adresu</section>
     <section class="card">
       <label class="field-label" for="search-input">Adres / APM / miasto / kod pocztowy</label>
-      <input type="text" id="search-input" placeholder="np. Lębork, SLU01G, 76-200…" autocomplete="off" />
+      <div class="search-row">
+        <input type="text" id="search-input" placeholder="np. Lębork, SLU01G, 76-200…" autocomplete="off" />
+        <button id="mic-btn" class="mic-btn" type="button" title="Szukaj głosowo" aria-label="Szukaj głosowo">🎤</button>
+      </div>
+      <div id="voice-feedback" class="voice-feedback hidden"></div>
+      <div id="voice-unsupported" class="voice-feedback hidden">
+        Wyszukiwanie głosowe nie jest wspierane w tej przeglądarce (najlepiej działa w Chrome).
+      </div>
     </section>
 
     <section id="results" class="results"></section>

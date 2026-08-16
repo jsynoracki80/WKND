@@ -1,0 +1,9 @@
+{
+  "name": "trasy-weekendowe",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Trasy weekendowe - Oddzial Slupsk",
+  "dependencies": {
+    "@netlify/blobs": "^10.7.13"
+  }
+}
