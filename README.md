@@ -41,15 +41,33 @@ adresów/kurierów — podmień odpowiedni plik w `data/` na nową wersję
 w tym samym formacie i wypchnij zmianę do GitHuba (Netlify wdroży
 automatycznie).
 
-## Znane niezgodności danych źródłowych (do potwierdzenia)
+## Rozwiązane niezgodności danych źródłowych
 
-- **Trasa G, „Bielecki”** (co 3. sobota od 25.07.2026): jedyny kurier
-  o nazwisku Bielecki w bazie pracuje dla CAR-TRANS Oliwia Lubert,
-  którego nie ma na liście stałych przewoźników trasy G w arkuszu
-  „Kurierzy”. Aplikacja oznacza to czerwonym ostrzeżeniem.
-- **Trasa F, „DOMAROS”**: w arkuszu „Kurierzy” nie rozróżniono, o
-  którego z dwóch przewoźników (Czesław Domaros / Sebastian Domaros)
-  chodzi — aplikacja pokazuje kurierów obu do ręcznego wyboru.
+- **Trasa G, „Bielecki”**: potwierdzone, że to zmieniona nazwa tego
+  samego przewoźnika (CAR-TRANS Oliwia Lubert → MAGDALENA LUBERT ITR).
+  Dane scalone, ostrzeżenie usunięte.
+- **Trasa F, „DOMAROS”**: dwie filie tej samej firmy (Czesław i
+  Sebastian Domaros) traktowane jako jeden przewoźnik — wyświetlane
+  pod wspólną nazwą „DOMAROS (Czesław + Sebastian)”, kurierzy obu
+  filii dostępni razem na liście wyboru.
+
+## Funkcje
+
+- **Wszystkie trasy** — ekran startowy pokazuje wszystkich 18 tras
+  z przewoźnikiem na wybraną sobotę i statusem deklaracji, jeszcze
+  zanim zaczniesz szukać konkretnego adresu.
+- **Zamiana kolejności rotacji** — dla tras N/S/P/U/G można ręcznie
+  nadpisać, który przewoźnik z puli obsługuje trasę w danym
+  tygodniu (np. gdy kurierzy zamienią się kolejnością). Zmiana
+  dotyczy tylko wybranej soboty, grafik bazowy zostaje nienaruszony.
+- **Zamiana kuriera między przewoźnikami** — poza szybkim wyborem
+  kuriera przypisanego przewoźnika, przycisk „Inny kurier (zamiana
+  z innej trasy)” otwiera wyszukiwarkę po wszystkich kurierach w
+  bazie (dowolny przewoźnik). Wybrany w ten sposób kurier oznaczony
+  jest odznaką „zamiana”.
+- **Wyszukiwarka adresu** — nadal dostępna niżej, do szybkiego
+  ustalenia, do której trasy należy dany adres/APM; link „Otwórz
+  trasę ↑” przewija do odpowiedniej karty na górze.
 
 ## Ewentualny kolejny krok: apka w Google Play (TWA)
 

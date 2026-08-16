@@ -36,21 +36,21 @@
       </div>
     </section>
 
-    <section class="card">
-      <label class="field-label" for="search-input">🔍 Szukaj adresu / APM / miasta / kodu</label>
-      <input type="text" id="search-input" placeholder="np. Lębork, SLU01G, 76-200…" autocomplete="off" />
-    </section>
-
-    <section id="results" class="results"></section>
-
-    <section id="empty-hint" class="empty-hint">
-      Wpisz adres, miasto, kod pocztowy lub kod APM, aby znaleźć trasę weekendową i zadeklarować kuriera.
-    </section>
-
     <section id="declared-summary" class="card hidden">
       <div class="summary-title">Zadeklarowani kurierzy — <span id="summary-date"></span></div>
       <div id="declared-list"></div>
     </section>
+
+    <section class="section-heading">🗺️ Wszystkie trasy</section>
+    <section id="all-routes" class="results"></section>
+
+    <section class="section-heading">🔍 Szukaj adresu</section>
+    <section class="card">
+      <label class="field-label" for="search-input">Adres / APM / miasto / kod pocztowy</label>
+      <input type="text" id="search-input" placeholder="np. Lębork, SLU01G, 76-200…" autocomplete="off" />
+    </section>
+
+    <section id="results" class="results"></section>
 
   </main>
 

@@ -1,4 +1,4 @@
-const CACHE_NAME = "trasy-weekendowe-v1";
+const CACHE_NAME = "trasy-weekendowe-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -9,6 +9,7 @@ const ASSETS = [
   "./data/addresses.json",
   "./data/route_carriers.json",
   "./data/rotation.json",
+  "./data/rotation_pools.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
 ];
