@@ -619,3 +619,103 @@ input:focus, select:focus {
   cursor: pointer;
   font-family: inherit;
 }
+
+/* --- Sticky pasek gorny --- */
+
+.sticky-top {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--bg);
+  padding: 10px 16px 12px;
+  box-shadow: 0 4px 10px -6px rgba(40,20,70,0.25);
+}
+
+.date-quickrow {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.date-chip {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 6px;
+  border-radius: 9px;
+  border: 1.5px solid var(--purple-border);
+  background: var(--card-bg);
+  color: var(--purple);
+  font-weight: 700;
+  font-size: 11.5px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.date-chip.active {
+  background: var(--purple);
+  color: white;
+  border-color: var(--purple);
+}
+
+.sticky-top input[type="date"] {
+  flex: 1.4;
+  min-width: 0;
+}
+
+.sticky-top .search-row {
+  margin-top: 4px;
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.progress-text {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.filter-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--purple);
+}
+
+.progress-bar-track {
+  margin-top: 6px;
+  height: 5px;
+  border-radius: 3px;
+  background: #E3DDF0;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--green-strong);
+  border-radius: 3px;
+  transition: width 0.25s ease;
+  width: 0%;
+}
+
+.route-card.missing .route-card-head {
+  border-left: 3px solid #F3B6B0;
+}

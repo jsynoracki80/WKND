@@ -39,6 +39,26 @@ funkcje serwerowe. To oznacza:
 - **wymaga wdrożenia na Netlify z aktywnymi Functions** — nie zadziała
   z lokalnego `python -m http.server` ani z otwarcia pliku bezpośrednio.
 
+## Baza kurierów
+
+Zaktualizowana na podstawie `kurierzy_aktywne_umowy_...xlsx` (140
+aktywnych kurierów wg umów, stan na 17.08.2026):
+
+- **Kurierzy typu RVM (opakowania kaucyjne) są całkowicie wykluczeni**
+  z bazy — nie pojawiają się ani w szybkim wyborze kuriera, ani w
+  wyszukiwarce zamiany „Inny kurier”. Obecnie to 10 osób.
+- Zostaje **130 kurierów typu MIX** (D2D + APM) w 27 przewoźnikach.
+- CAR-TRANS Oliwia Lubert i MAGDALENA LUBERT ITR są nadal traktowane
+  jako jedna firma (scalone, zgodnie z wcześniejszym ustaleniem) —
+  4 kurierów razem pod etykietą „Lubert”.
+
+**Aktualizacja w przyszłości**: gdy zmieni się skład kurierów albo
+któryś przejdzie na RVM/z powrotem na MIX, wystarczy wygenerować
+nowy raport aktywnych umów (ten sam format kolumn: Imię, Nazwisko,
+Numer EABI, Numer kuriera, Typ kuriera, telefony, NIP, Nazwa
+przewoźnika) i przesłać do przetworzenia — bez ręcznego pisania
+listy wykluczeń.
+
 ## Wdrożenie na Netlify
 
 1. Wrzuć całą zawartość folderu `weekend-app/` do repo (zachowując
@@ -65,25 +85,31 @@ zablokowane, z czerwonym ostrzeżeniem w interfejsie.
 
 ## Nowości w tej wersji
 
-- **Kolejność w karcie trasy**: po rozwinięciu trasy najpierw widać
-  zwijane podmenu „👤 Kurier” (otwarte domyślnie, dopóki nie ma
-  deklaracji), potem „🔁 Zamiana kolejności rotacji” (tylko trasy
-  N/S/P/U/G), na końcu „📍 Przykładowe adresy”.
-- **Historia** — osobna sekcja niżej na stronie, pokazuje wszystkie
-  minione soboty z zapisanymi deklaracjami. Rozwijalna karta na
-  sobotę pokazuje listę tras+kurierów, z przyciskiem „Otwórz tę
-  sobotę w edytorze”, żeby np. skorygować wpis z przeszłości.
-- **Hasło do zapisu** — sekcja „🔒 Ustawienia” na górze strony,
-  zwijana. Wpisane raz zapamiętuje się na urządzeniu (localStorage) —
-  potrzebne tylko przy zapisie/usuwaniu, nie przy przeglądaniu.
-- **Wyszukiwanie głosowe** — przycisk 🎤 obok pola wyszukiwania
-  adresu. Działa przez wbudowane w przeglądarkę rozpoznawanie mowy
-  (Web Speech API, język polski) — najlepiej wspierane w Chrome
-  (w tym Chrome na Androidzie). Jeśli w wypowiedzi nie pada nazwa
-  żadnego znanego miasta z bazy, aplikacja automatycznie dopisuje
-  „Słupsk” do zapytania — więc powiedzenie samej ulicy i numeru
-  (np. „Łotewska 2”) trafi we właściwy adres w Słupsku, nawet gdy
-  taka sama nazwa ulicy istnieje też w innej miejscowości.
+- **Skrócone nazwy przewoźników** — wszędzie w interfejsie zamiast
+  pełnych nazw prawnych widać krótkie etykiety (np. „Krefta”,
+  „Kozioł”, „Opos”, „Domaros”) ustalone wspólnie. Trasa F (dwie
+  filie Domaros) wyświetla się jako jeden „Domaros”.
+- **Wyszukiwarka scalona z listą tras** — jedno pole na górze filtruje
+  bezpośrednio karty tras zamiast osobnej listy wyników. Pasująca
+  trasa rozwija się automatycznie i pokazuje tylko pasujące adresy.
+- **Sticky pasek na górze** — data, chipy szybkiego wyboru („Ta
+  sobota” / „Następna sobota” / „Za 2 tyg.”), wyszukiwarka i
+  mikrofon zostają widoczne na ekranie nawet przy przewijaniu listy
+  tras w dół.
+- **Licznik postępu** — pasek „X/18 tras obsadzonych” z wizualnym
+  paskiem postępu, aktualizuje się na bieżąco.
+- **Filtr „tylko brakujące”** — przełącznik ukrywający trasy, które
+  mają już zadeklarowanego kuriera na wybraną sobotę.
+- **Sortowanie: brakujące najpierw** — trasy bez kuriera są zawsze na
+  górze listy (poza aktywnym wyszukiwaniem, gdzie liczy się trafność).
+- **Kolejność w karcie trasy**: „👤 Kurier” (pierwsze, otwarte
+  domyślnie dopóki nie ma deklaracji) → „🔁 Zamiana kolejności
+  rotacji” (tylko N/S/P/U/G) → „📍 Adresy” (na końcu).
+- **Historia** — sekcja z minionymi sobotami, rozwijalna, z
+  możliwością otwarcia danej soboty w edytorze.
+- **Wyszukiwanie głosowe** — przycisk 🎤, domyślnie dopisuje „Słupsk”
+  gdy nie podano miasta.
+- **Hasło do zapisu** — zwijana sekcja „🔒 Ustawienia”.
 
 
 ## Instalacja na Androidzie (jako PWA)

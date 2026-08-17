@@ -26,18 +26,40 @@
     </div>
   </header>
 
-  <main class="content">
+  <div id="loading-banner" class="loading-banner">⏳ Ładowanie danych…</div>
+  <div id="sync-error-banner" class="sync-error hidden"></div>
 
-    <div id="loading-banner" class="loading-banner">⏳ Ładowanie danych…</div>
-    <div id="sync-error-banner" class="sync-error hidden"></div>
-
-    <section class="card">
-      <label class="field-label" for="date-input">📅 Sobota</label>
+  <div class="sticky-top">
+    <div class="date-quickrow">
+      <button class="date-chip" data-offset="0">Ta sobota</button>
+      <button class="date-chip" data-offset="1">Następna sobota</button>
+      <button class="date-chip" data-offset="2">Za 2 tyg.</button>
       <input type="date" id="date-input" />
-      <div id="date-warning" class="warning hidden">
-        ⚠️ Wybrana data nie jest sobotą — trasy weekendowe dotyczą tylko sobót.
-      </div>
-    </section>
+    </div>
+    <div id="date-warning" class="warning hidden">
+      ⚠️ Wybrana data nie jest sobotą — trasy weekendowe dotyczą tylko sobót.
+    </div>
+
+    <div class="search-row">
+      <input type="text" id="search-input" placeholder="🔍 Szukaj: adres, APM, miasto, kod…" autocomplete="off" />
+      <button id="mic-btn" class="mic-btn" type="button" title="Szukaj głosowo" aria-label="Szukaj głosowo">🎤</button>
+    </div>
+    <div id="voice-feedback" class="voice-feedback hidden"></div>
+    <div id="voice-unsupported" class="voice-feedback hidden">
+      Wyszukiwanie głosowe nie jest wspierane w tej przeglądarce (najlepiej działa w Chrome).
+    </div>
+
+    <div class="progress-row">
+      <div class="progress-text"><span id="progress-count">0/18</span> tras obsadzonych</div>
+      <label class="filter-toggle">
+        <input type="checkbox" id="filter-missing" />
+        <span>tylko brakujące</span>
+      </label>
+    </div>
+    <div class="progress-bar-track"><div id="progress-bar-fill" class="progress-bar-fill"></div></div>
+  </div>
+
+  <main class="content">
 
     <section class="card">
       <div class="settings-head" id="settings-toggle">
@@ -55,32 +77,18 @@
       <div id="declared-list"></div>
     </section>
 
-    <section class="section-heading">🗺️ Wszystkie trasy</section>
+    <section class="section-heading">🗺️ Trasy</section>
     <section id="all-routes" class="results"></section>
+    <div id="no-match-hint" class="empty-hint hidden">Brak tras pasujących do wyszukiwania.</div>
 
     <section class="section-heading">📜 Historia (minione soboty)</section>
     <section id="history" class="results"></section>
     <div id="history-empty" class="empty-hint hidden">Brak zapisanych deklaracji z minionych sobót.</div>
 
-    <section class="section-heading">🔍 Szukaj adresu</section>
-    <section class="card">
-      <label class="field-label" for="search-input">Adres / APM / miasto / kod pocztowy</label>
-      <div class="search-row">
-        <input type="text" id="search-input" placeholder="np. Lębork, SLU01G, 76-200…" autocomplete="off" />
-        <button id="mic-btn" class="mic-btn" type="button" title="Szukaj głosowo" aria-label="Szukaj głosowo">🎤</button>
-      </div>
-      <div id="voice-feedback" class="voice-feedback hidden"></div>
-      <div id="voice-unsupported" class="voice-feedback hidden">
-        Wyszukiwanie głosowe nie jest wspierane w tej przeglądarce (najlepiej działa w Chrome).
-      </div>
-    </section>
-
-    <section id="results" class="results"></section>
-
   </main>
 
   <footer class="footnote">
-    Dane zapisują się lokalnie na tym urządzeniu (localStorage).<br/>
+    Dane deklaracji: Netlify Blobs (trwałe, wspólne dla wszystkich urządzeń).<br/>
     Trasy: Trasy_WKN_CZERWIEC_2026.xlsx · Rotacja N/S/P/U/G: 18.07.2026–02.01.2027 · Kurierzy: Tabela_skuteczności.xlsx
   </footer>
 

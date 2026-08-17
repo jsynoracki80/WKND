@@ -8,7 +8,39 @@
 const ALL_ROUTES = ["A","B","C","D","F","G","J","K","M","N","P","Q","S","T","U","V","W","X"];
 const ROTATING_ROUTES = ["N", "S", "P", "U", "G"];
 const MERGED_LABELS = {
-  F: "DOMAROS (Czesław + Sebastian)",
+  F: "Domaros",
+};
+
+// Skrócone nazwy przewoźników do wyświetlania w interfejsie.
+// Pełna nazwa prawna jest nadal używana jako klucz w danych/API.
+const CARRIER_ABBREV = {
+  '" SZELTRANS" BARTŁOMIEJ SZELĄG': "Szeląg",
+  "ANZA PAULINA ZYGOWSKA": "Szostak",
+  "AZLTRANS Daniel Gąsiorek": "Daniel G.",
+  "DAWID WÓDZ Trans": "Wódz D.",
+  'FIRMA HANDLOWO-USŁUGOWA "MIKOTRANS" DAGOMIR GĄSIOREK': "Dagosz",
+  "FIRMA USŁUGOWA KATARZYNA GÓRSKA": "Górski",
+  "FIRMA USŁUGOWA KLAUDIA WIŚNIEWSKA": "Wojtas",
+  'FIRMA USŁUGOWO TRANSPORTOWA "GREGOR" Grzegorz Kozioł': "Kozioł",
+  "GALERIA PREZENTÓW STUDIO VIDEO EDIT GRZEGORZ KREFTA": "Krefta",
+  'Gabinet Rozwoju Dziecka "JUSKAR" Anna Prokopowicz': "Prokopowicz",
+  "JAKUB GIEC": "Giec",
+  "JANUSZ WENTA STOLARSTWO - WENTA": "Hasiec",
+  "KACPER KULPA": "Kulpa",
+  "KAR-MAT PAULA KONDRACIUK": "Kondraciuk",
+  "MAGDALENA LUBERT ITR": "Lubert",
+  "Mechanika Pojazdowa - Serwis Mobilny - Wulkanizacja MKM Mateusz Konkel": "Konkel",
+  "NIEZAPOMINAJKA PAULINA ŚWITALSKA": "Niezapominajka",
+  "OPOS CARS  TOMASZ ROZENKRANC": "Opos",
+  'PRZEDSIĘBIORSTWO HANDLOWO USŁUGOWE "GRUBE RYBY" TOMASZ SAWICKI': "Sawicki",
+  "PRZEDSIĘBIORSTWO HANDLOWO USŁUGOWE Dorota Puławska": "Puławska",
+  "PRZEMYSŁAW KUCZYŃSKI": "Kuczyński",
+  "Patryk Wódz": "Wódz P.",
+  "RYŚ-TRANS RYSZARD JANKOWSKI": "Jankowski",
+  "TRANSMAD KRZYSZTOF MADURAJSKI": "Gumiś",
+  "TRANSMO Marcin Orwat": "Orwat",
+  "USŁUGI TRANSPORTOWE CZESŁAW DOMAROS": "Domaros",
+  "USŁUGI TRANSPORTOWE SEBASTIAN DOMAROS": "Domaros",
 };
 
 const API_BASE = "/.netlify/functions";
@@ -28,19 +60,21 @@ let DECLARATIONS = {};       // route__date -> {courierNr, courierName, carrier,
 let ROTATION_OVERRIDES = {}; // route__date -> {carrier, savedAt}
 let PASSWORD = localStorage.getItem(PASSWORD_STORAGE_KEY) || "";
 let BACKEND_OK = true;
+let filterMissingOnly = false;
 
-const expandedRoutes = new Set();   // top-level route card open/closed
-const sectionState = new Map();     // "route::section" -> bool (overrides default)
-const swapSearchOpen = new Set();   // route__date keys where "inny kurier" search is open
+const expandedRoutes = new Set();
+const sectionState = new Map();
+const swapSearchOpen = new Set();
 
 const dateInput = document.getElementById("date-input");
 const dateWarning = document.getElementById("date-warning");
+const dateChips = document.querySelectorAll(".date-chip");
 const searchInput = document.getElementById("search-input");
 const micBtn = document.getElementById("mic-btn");
 const voiceFeedback = document.getElementById("voice-feedback");
 const voiceUnsupported = document.getElementById("voice-unsupported");
-const resultsEl = document.getElementById("results");
 const allRoutesEl = document.getElementById("all-routes");
+const noMatchHint = document.getElementById("no-match-hint");
 const historyEl = document.getElementById("history");
 const historyEmptyEl = document.getElementById("history-empty");
 const declaredSummary = document.getElementById("declared-summary");
@@ -52,6 +86,9 @@ const settingsToggle = document.getElementById("settings-toggle");
 const settingsBody = document.getElementById("settings-body");
 const settingsChevron = document.getElementById("settings-chevron");
 const passwordInput = document.getElementById("password-input");
+const progressCount = document.getElementById("progress-count");
+const progressBarFill = document.getElementById("progress-bar-fill");
+const filterMissingCheckbox = document.getElementById("filter-missing");
 
 // -------------------------------------------------------------
 // Inicjalizacja
@@ -67,6 +104,20 @@ async function init() {
   settingsToggle.addEventListener("click", () => {
     settingsBody.classList.toggle("hidden");
     settingsChevron.classList.toggle("open");
+  });
+
+  dateChips.forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const offset = parseInt(chip.dataset.offset, 10);
+      dateInput.value = saturdayWithOffsetISO(offset);
+      validateDate();
+      renderAll();
+    });
+  });
+
+  filterMissingCheckbox.addEventListener("change", () => {
+    filterMissingOnly = filterMissingCheckbox.checked;
+    renderRoutesList();
   });
 
   const [couriers, addresses, routeCarriers, rotation, rotationPools] = await Promise.all([
@@ -98,7 +149,7 @@ async function init() {
     renderAll();
   });
 
-  searchInput.addEventListener("input", () => renderSearchResults());
+  searchInput.addEventListener("input", () => renderRoutesList());
   setupVoiceSearch();
 
   await refreshFromBackend();
@@ -132,92 +183,12 @@ function buildFlatCourierIndex() {
   return list;
 }
 
-// -------------------------------------------------------------
-// Wyszukiwanie glosowe
-// -------------------------------------------------------------
-
-function normalizeText(s) {
-  return (s || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, ""); // usuwa polskie znaki diakrytyczne do porownania
-}
-
 function buildKnownCities() {
   const set = new Set();
   ADDRESSES.forEach((a) => {
     if (a.miasto) set.add(a.miasto.trim());
   });
   return [...set];
-}
-
-function transcriptMentionsCity(transcript) {
-  const norm = normalizeText(transcript);
-  return KNOWN_CITIES.some((city) => norm.includes(normalizeText(city)));
-}
-
-function setupVoiceSearch() {
-  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  if (!SpeechRecognitionCtor) {
-    micBtn.classList.add("hidden");
-    voiceUnsupported.classList.remove("hidden");
-    return;
-  }
-
-  const recognition = new SpeechRecognitionCtor();
-  recognition.lang = "pl-PL";
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
-
-  let listening = false;
-
-  recognition.addEventListener("start", () => {
-    listening = true;
-    micBtn.classList.add("listening");
-    voiceFeedback.classList.remove("hidden");
-    voiceFeedback.textContent = "🎤 Słucham…";
-  });
-
-  recognition.addEventListener("end", () => {
-    listening = false;
-    micBtn.classList.remove("listening");
-  });
-
-  recognition.addEventListener("error", (e) => {
-    listening = false;
-    micBtn.classList.remove("listening");
-    voiceFeedback.textContent = "⚠️ Nie udało się rozpoznać mowy (" + e.error + "). Spróbuj ponownie.";
-  });
-
-  recognition.addEventListener("result", (event) => {
-    let transcript = (event.results[0][0].transcript || "").trim();
-    if (!transcript) return;
-
-    const hadCity = transcriptMentionsCity(transcript);
-    if (!hadCity) {
-      transcript = `${transcript} ${DEFAULT_CITY}`;
-    }
-
-    searchInput.value = transcript;
-    renderSearchResults();
-
-    voiceFeedback.textContent = hadCity
-      ? `🎤 Rozpoznano: „${transcript}”`
-      : `🎤 Rozpoznano: „${transcript}” (nie podano miasta — domyślnie dodano „${DEFAULT_CITY}”)`;
-  });
-
-  micBtn.addEventListener("click", () => {
-    if (listening) {
-      recognition.stop();
-      return;
-    }
-    try {
-      recognition.start();
-    } catch {
-      // recognition already running - ignore
-    }
-  });
 }
 
 // -------------------------------------------------------------
@@ -252,9 +223,7 @@ async function apiPost(path, body) {
     body: JSON.stringify({ ...body, password: PASSWORD }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || `Błąd zapisu (${res.status})`);
-  }
+  if (!res.ok) throw new Error(data.error || `Błąd zapisu (${res.status})`);
   return data;
 }
 
@@ -265,16 +234,13 @@ async function apiDelete(path, body) {
     body: JSON.stringify({ ...body, password: PASSWORD }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || `Błąd usuwania (${res.status})`);
-  }
+  if (!res.ok) throw new Error(data.error || `Błąd usuwania (${res.status})`);
   return data;
 }
 
 function renderAll() {
   renderRoutesList();
   renderHistory();
-  renderSearchResults();
   renderSummary();
 }
 
@@ -283,11 +249,15 @@ function renderAll() {
 // -------------------------------------------------------------
 
 function nextSaturdayISO() {
+  return saturdayWithOffsetISO(0);
+}
+
+function saturdayWithOffsetISO(weeksAhead) {
   const now = new Date();
   const day = now.getDay();
   const diff = (6 - day + 7) % 7;
   const sat = new Date(now);
-  sat.setDate(now.getDate() + diff);
+  sat.setDate(now.getDate() + diff + weeksAhead * 7);
   return toISO(sat);
 }
 
@@ -315,6 +285,11 @@ function fmtDatePL(iso) {
 function validateDate() {
   const ok = isSaturday(dateInput.value);
   dateWarning.classList.toggle("hidden", ok);
+
+  dateChips.forEach((chip) => {
+    const offset = parseInt(chip.dataset.offset, 10);
+    chip.classList.toggle("active", saturdayWithOffsetISO(offset) === dateInput.value);
+  });
 }
 
 // -------------------------------------------------------------
@@ -359,9 +334,14 @@ function effectiveCarrierInfo(route, dateISO) {
   return { carriers: ROUTE_CARRIERS[route] || [], label: null, inSchedule: true, overridden: false, isRotating };
 }
 
+function abbrevCarrier(fullName) {
+  return CARRIER_ABBREV[fullName] || fullName;
+}
+
 function carrierDisplayName(route, carriers) {
   if (MERGED_LABELS[route]) return MERGED_LABELS[route];
-  return carriers.join(" / ");
+  const abbrevs = [...new Set(carriers.map(abbrevCarrier))];
+  return abbrevs.join(" / ");
 }
 
 function couriersForCarriers(carrierNames) {
@@ -436,26 +416,83 @@ function buildAccordion(key, titleHTML, summaryText, defaultOpen, bodyBuilderFn)
 }
 
 // -------------------------------------------------------------
-// Render: lista wszystkich tras
+// Wyszukiwanie adresow (uzywane do filtrowania listy tras)
+// -------------------------------------------------------------
+
+function addressMatchesQuery(a, query) {
+  const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  const haystack = `${a.apm} ${a.adres || ""} ${a.miasto || ""} ${a.kod || ""}`.toLowerCase();
+  return words.every((w) => haystack.includes(w));
+}
+
+function routeMatchesQuery(route, query) {
+  if (!query.trim()) return true;
+  const addrs = ADDRESSES_BY_ROUTE[route] || [];
+  if (route.toLowerCase() === query.trim().toLowerCase()) return true;
+  return addrs.some((a) => addressMatchesQuery(a, query));
+}
+
+function matchingAddressesForRoute(route, query) {
+  const addrs = ADDRESSES_BY_ROUTE[route] || [];
+  if (!query.trim()) return addrs;
+  return addrs.filter((a) => addressMatchesQuery(a, query));
+}
+
+// -------------------------------------------------------------
+// Render: lista tras (scalona z wyszukiwaniem + filtrem + sortowaniem)
 // -------------------------------------------------------------
 
 function renderRoutesList() {
   const dateISO = dateInput.value;
-  allRoutesEl.innerHTML = "";
+  const query = searchInput.value;
+  const hasQuery = query.trim().length > 0;
 
-  ALL_ROUTES.forEach((route) => {
-    allRoutesEl.appendChild(buildRouteCard(route, dateISO));
+  let routes = ALL_ROUTES.filter((r) => routeMatchesQuery(r, query));
+
+  if (filterMissingOnly) {
+    routes = routes.filter((r) => !DECLARATIONS[declKey(r, dateISO)]);
+  }
+
+  // Sortowanie: brakujace najpierw (chyba ze aktywne wyszukiwanie - wtedy zachowaj trafnosc/alfabet)
+  routes.sort((a, b) => {
+    if (!hasQuery) {
+      const aMissing = !DECLARATIONS[declKey(a, dateISO)];
+      const bMissing = !DECLARATIONS[declKey(b, dateISO)];
+      if (aMissing !== bMissing) return aMissing ? -1 : 1;
+    }
+    return a.localeCompare(b);
   });
+
+  allRoutesEl.innerHTML = "";
+  noMatchHint.classList.toggle("hidden", routes.length > 0);
+
+  if (hasQuery) {
+    routes.forEach((r) => expandedRoutes.add(r));
+  }
+
+  routes.forEach((route) => {
+    allRoutesEl.appendChild(buildRouteCard(route, dateISO, hasQuery ? query : ""));
+  });
+
+  updateProgress(dateISO);
 }
 
-function buildRouteCard(route, dateISO) {
+function updateProgress(dateISO) {
+  const declaredCount = ALL_ROUTES.filter((r) => DECLARATIONS[declKey(r, dateISO)]).length;
+  progressCount.textContent = `${declaredCount}/${ALL_ROUTES.length}`;
+  const pct = Math.round((declaredCount / ALL_ROUTES.length) * 100);
+  progressBarFill.style.width = `${pct}%`;
+}
+
+function buildRouteCard(route, dateISO, highlightQuery) {
   const info = effectiveCarrierInfo(route, dateISO);
   const carrierLabel = carrierDisplayName(route, info.carriers);
   const declared = DECLARATIONS[declKey(route, dateISO)];
   const isOpen = expandedRoutes.has(route);
 
   const card = document.createElement("div");
-  card.className = "route-card";
+  card.className = `route-card ${!declared ? "missing" : ""}`;
   card.id = `route-${route}`;
 
   const head = document.createElement("div");
@@ -477,7 +514,7 @@ function buildRouteCard(route, dateISO) {
   const body = document.createElement("div");
   body.className = `route-card-body ${isOpen ? "" : "hidden"}`;
   if (isOpen) {
-    body.appendChild(buildRouteCardBody(route, dateISO, info, declared));
+    body.appendChild(buildRouteCardBody(route, dateISO, info, declared, highlightQuery));
   }
 
   card.appendChild(head);
@@ -485,11 +522,11 @@ function buildRouteCard(route, dateISO) {
   return card;
 }
 
-function buildRouteCardBody(route, dateISO, info, declared) {
+function buildRouteCardBody(route, dateISO, info, declared, highlightQuery) {
   const wrap = document.createElement("div");
   wrap.style.paddingTop = "10px";
 
-  // === 1. KURIER — pierwsze, najważniejsze ===
+  // === 1. KURIER — pierwsze, najwazniejsze ===
   const courierKey = `${route}::courier`;
   const courierSummary = declared ? declared.courierName : "brak deklaracji";
   wrap.appendChild(
@@ -511,19 +548,29 @@ function buildRouteCardBody(route, dateISO, info, declared) {
     );
   }
 
-  // === 3. ADRESY — najmniej istotne, na końcu ===
-  const addrs = ADDRESSES_BY_ROUTE[route] || [];
-  if (addrs.length) {
+  // === 3. ADRESY — na koncu; jesli aktywne wyszukiwanie, pokaz dopasowane ===
+  const addrs = highlightQuery
+    ? matchingAddressesForRoute(route, highlightQuery)
+    : ADDRESSES_BY_ROUTE[route] || [];
+  const allAddrs = ADDRESSES_BY_ROUTE[route] || [];
+  if (allAddrs.length) {
     const addrKey = `${route}::addresses`;
+    const label = highlightQuery ? `📍 Pasujące adresy` : `📍 Przykładowe adresy`;
     wrap.appendChild(
-      buildAccordion(addrKey, "📍 Przykładowe adresy", `${addrs.length} adresów`, false, () => {
+      buildAccordion(addrKey, label, `${addrs.length} z ${allAddrs.length}`, !!highlightQuery, () => {
         const chipWrap = document.createElement("div");
-        addrs.slice(0, 8).forEach((a) => {
+        addrs.slice(0, 10).forEach((a) => {
           const chip = document.createElement("span");
           chip.className = "address-chip";
           chip.textContent = `${a.adres || a.apm}, ${a.miasto}`;
           chipWrap.appendChild(chip);
         });
+        if (addrs.length === 0) {
+          const none = document.createElement("div");
+          none.style.cssText = "font-size:12px;color:#9186A0;";
+          none.textContent = "Brak pasujących adresów w tej trasie.";
+          chipWrap.appendChild(none);
+        }
         return chipWrap;
       })
     );
@@ -544,7 +591,7 @@ function buildRotationBody(route, dateISO, info) {
   pool.forEach((c) => {
     const opt = document.createElement("option");
     opt.value = c;
-    opt.textContent = c;
+    opt.textContent = abbrevCarrier(c);
     select.appendChild(opt);
   });
   select.value = info.overridden ? info.carriers[0] : "";
@@ -708,7 +755,7 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
         const row = document.createElement("div");
         row.style.cssText =
           "padding:8px 9px; border-radius:8px; font-size:13px; cursor:pointer; border:1px solid #F0ECF6; margin-bottom:5px;";
-        row.innerHTML = `<strong>${escapeHTML(m.imie)} ${escapeHTML(m.nazwisko)}</strong> (${escapeHTML(m.nr)})<br><span style="color:#9186A0;font-size:11.5px;">${escapeHTML(m.carrier)}</span>`;
+        row.innerHTML = `<strong>${escapeHTML(m.imie)} ${escapeHTML(m.nazwisko)}</strong> (${escapeHTML(m.nr)})<br><span style="color:#9186A0;font-size:11.5px;">${escapeHTML(abbrevCarrier(m.carrier))}</span>`;
         row.addEventListener("click", async () => {
           try {
             await declareCourier(route, dateISO, {
@@ -742,7 +789,7 @@ function renderHistory() {
 
   Object.entries(DECLARATIONS).forEach(([key, val]) => {
     const [route, date] = key.split("__");
-    if (date >= today) return; // tylko minione
+    if (date >= today) return;
     if (!byDate[date]) byDate[date] = [];
     byDate[date].push({ route, ...val });
   });
@@ -803,73 +850,6 @@ function renderHistory() {
 }
 
 // -------------------------------------------------------------
-// Render: wyszukiwanie adresow (skrot do trasy)
-// -------------------------------------------------------------
-
-function addressMatchesQuery(a, query) {
-  const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return false;
-  const haystack = `${a.apm} ${a.adres || ""} ${a.miasto || ""} ${a.kod || ""}`.toLowerCase();
-  return words.every((w) => haystack.includes(w));
-}
-
-function renderSearchResults() {
-  const q = searchInput.value.trim().toLowerCase();
-  resultsEl.innerHTML = "";
-  if (!q) return;
-
-  const matches = ADDRESSES.filter((a) => addressMatchesQuery(a, q)).slice(0, 30);
-
-  if (matches.length === 0) {
-    const div = document.createElement("div");
-    div.className = "empty-hint";
-    div.textContent = `Brak wyników dla „${searchInput.value.trim()}”.`;
-    resultsEl.appendChild(div);
-    return;
-  }
-
-  const dateISO = dateInput.value;
-
-  matches.forEach((r) => {
-    const info = effectiveCarrierInfo(r.trasa, dateISO);
-    const declared = DECLARATIONS[declKey(r.trasa, dateISO)];
-
-    const card = document.createElement("div");
-    card.className = "result-card";
-    card.innerHTML = `
-      <div class="result-head">
-        <span class="route-badge">${r.trasa}</span>
-        <span class="result-addr">${escapeHTML(r.adres || r.apm)}</span>
-      </div>
-      <div class="result-meta">📍 ${escapeHTML(r.miasto || "")} ${escapeHTML(r.kod || "")} · APM ${escapeHTML(r.apm)}</div>
-      <div class="result-body">
-        <div class="carrier-line">
-          Przewoźnik: <strong>${escapeHTML(carrierDisplayName(r.trasa, info.carriers))}</strong>
-        </div>
-        <div class="carrier-line">
-          Kurier: ${declared ? "✅ " + escapeHTML(declared.courierName) : "brak deklaracji"}
-        </div>
-        <a href="#route-${r.trasa}" class="jump-link">Otwórz trasę ${r.trasa} ↑</a>
-      </div>
-    `;
-    card.querySelector(".jump-link").addEventListener("click", (e) => {
-      e.preventDefault();
-      expandedRoutes.add(r.trasa);
-      renderRoutesList();
-      requestAnimationFrame(() => {
-        const target = document.getElementById(`route-${r.trasa}`);
-        if (target) {
-          target.scrollIntoView({ behavior: "smooth", block: "start" });
-          target.classList.add("route-flash");
-          setTimeout(() => target.classList.remove("route-flash"), 1200);
-        }
-      });
-    });
-    resultsEl.appendChild(card);
-  });
-}
-
-// -------------------------------------------------------------
 // Render: podsumowanie zadeklarowanych kurierow (biezaca data)
 // -------------------------------------------------------------
 
@@ -910,6 +890,86 @@ function renderSummary() {
       row.appendChild(btn);
       declaredListEl.appendChild(row);
     });
+}
+
+// -------------------------------------------------------------
+// Wyszukiwanie glosowe
+// -------------------------------------------------------------
+
+function normalizeText(s) {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function transcriptMentionsCity(transcript) {
+  const norm = normalizeText(transcript);
+  return KNOWN_CITIES.some((city) => norm.includes(normalizeText(city)));
+}
+
+function setupVoiceSearch() {
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SpeechRecognitionCtor) {
+    micBtn.classList.add("hidden");
+    voiceUnsupported.classList.remove("hidden");
+    return;
+  }
+
+  const recognition = new SpeechRecognitionCtor();
+  recognition.lang = "pl-PL";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  let listening = false;
+
+  recognition.addEventListener("start", () => {
+    listening = true;
+    micBtn.classList.add("listening");
+    voiceFeedback.classList.remove("hidden");
+    voiceFeedback.textContent = "🎤 Słucham…";
+  });
+
+  recognition.addEventListener("end", () => {
+    listening = false;
+    micBtn.classList.remove("listening");
+  });
+
+  recognition.addEventListener("error", (e) => {
+    listening = false;
+    micBtn.classList.remove("listening");
+    voiceFeedback.textContent = "⚠️ Nie udało się rozpoznać mowy (" + e.error + "). Spróbuj ponownie.";
+  });
+
+  recognition.addEventListener("result", (event) => {
+    let transcript = (event.results[0][0].transcript || "").trim();
+    if (!transcript) return;
+
+    const hadCity = transcriptMentionsCity(transcript);
+    if (!hadCity) {
+      transcript = `${transcript} ${DEFAULT_CITY}`;
+    }
+
+    searchInput.value = transcript;
+    renderRoutesList();
+
+    voiceFeedback.textContent = hadCity
+      ? `🎤 Rozpoznano: „${transcript}”`
+      : `🎤 Rozpoznano: „${transcript}” (nie podano miasta — domyślnie dodano „${DEFAULT_CITY}”)`;
+  });
+
+  micBtn.addEventListener("click", () => {
+    if (listening) {
+      recognition.stop();
+      return;
+    }
+    try {
+      recognition.start();
+    } catch {
+      // recognition already running
+    }
+  });
 }
 
 // -------------------------------------------------------------
