@@ -1,12 +1,15 @@
 // =============================================================
 // Netlify Function: ręczne zamiany kolejności rotacji (N/S/P/U/G)
+//
+// WAŻNE: każda zamiana (trasa+data) ma WŁASNY, niezależny klucz —
+// patrz komentarz w declarations.js po co (unikanie utraty zapisów
+// przy nachodzących na siebie równoczesnych operacjach).
 // =============================================================
 
 const { connectLambda, getStore } = require("@netlify/blobs");
 
 const PASSWORD = process.env.WEEKEND_APP_PASSWORD;
 const STORE_NAME = "weekend-rotation-overrides";
-const KEY = "all";
 
 const HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -19,6 +22,25 @@ function json(statusCode, body) {
   return { statusCode, headers: HEADERS, body: JSON.stringify(body) };
 }
 
+function entryKey(route, date) {
+  return `${route}__${date}`;
+}
+
+async function getAllEntries(store) {
+  const { blobs } = await store.list();
+  const entries = await Promise.all(
+    blobs.map(async (b) => {
+      const value = await store.get(b.key, { type: "json" });
+      return [b.key, value];
+    })
+  );
+  const result = {};
+  entries.forEach(([key, value]) => {
+    if (value != null) result[key] = value;
+  });
+  return result;
+}
+
 exports.handler = async (event) => {
   connectLambda(event);
   const store = getStore(STORE_NAME);
@@ -29,7 +51,7 @@ exports.handler = async (event) => {
 
   try {
     if (event.httpMethod === "GET") {
-      const data = (await store.get(KEY, { type: "json" })) || {};
+      const data = await getAllEntries(store);
       return json(200, data);
     }
 
@@ -45,10 +67,13 @@ exports.handler = async (event) => {
         return json(400, { error: "Brak wymaganych pól (route, date, carrier)." });
       }
 
-      const current = (await store.get(KEY, { type: "json" })) || {};
-      current[`${route}__${date}`] = { carrier, savedAt: new Date().toISOString() };
-      await store.setJSON(KEY, current);
-      return json(200, { ok: true, data: current });
+      await store.setJSON(entryKey(route, date), {
+        carrier,
+        savedAt: new Date().toISOString(),
+      });
+
+      const data = await getAllEntries(store);
+      return json(200, { ok: true, data });
     }
 
     if (event.httpMethod === "DELETE") {
@@ -63,10 +88,10 @@ exports.handler = async (event) => {
         return json(400, { error: "Brak wymaganych pól (route, date)." });
       }
 
-      const current = (await store.get(KEY, { type: "json" })) || {};
-      delete current[`${route}__${date}`];
-      await store.setJSON(KEY, current);
-      return json(200, { ok: true, data: current });
+      await store.delete(entryKey(route, date));
+
+      const data = await getAllEntries(store);
+      return json(200, { ok: true, data });
     }
 
     return json(405, { error: "Method not allowed" });

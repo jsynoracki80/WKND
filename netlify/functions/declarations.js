@@ -2,13 +2,19 @@
 // Netlify Function: deklaracje kurierów na trasy weekendowe
 // Trwały, wspólny magazyn (Netlify Blobs) — dostępny z każdego
 // urządzenia, przetrwa zamknięcie przeglądarki / redeploy strony.
+//
+// WAŻNE: każda deklaracja (trasa+data) ma WŁASNY, niezależny klucz
+// w magazynie (zamiast jednego wspólnego obiektu "all"). Dzięki temu
+// dwa równoczesne zapisy różnych tras nigdy się nie nadpisują —
+// wcześniej (odczyt-modyfikacja-zapis całości) prowadziło to do
+// gubienia wcześniejszych deklaracji przy szybkich, nachodzących
+// na siebie akcjach.
 // =============================================================
 
 const { connectLambda, getStore } = require("@netlify/blobs");
 
 const PASSWORD = process.env.WEEKEND_APP_PASSWORD;
 const STORE_NAME = "weekend-declarations";
-const KEY = "all";
 
 const HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -21,6 +27,25 @@ function json(statusCode, body) {
   return { statusCode, headers: HEADERS, body: JSON.stringify(body) };
 }
 
+function entryKey(route, date) {
+  return `${route}__${date}`;
+}
+
+async function getAllEntries(store) {
+  const { blobs } = await store.list();
+  const entries = await Promise.all(
+    blobs.map(async (b) => {
+      const value = await store.get(b.key, { type: "json" });
+      return [b.key, value];
+    })
+  );
+  const result = {};
+  entries.forEach(([key, value]) => {
+    if (value != null) result[key] = value;
+  });
+  return result;
+}
+
 exports.handler = async (event) => {
   connectLambda(event);
   const store = getStore(STORE_NAME);
@@ -31,7 +56,7 @@ exports.handler = async (event) => {
 
   try {
     if (event.httpMethod === "GET") {
-      const data = (await store.get(KEY, { type: "json" })) || {};
+      const data = await getAllEntries(store);
       return json(200, data);
     }
 
@@ -47,15 +72,15 @@ exports.handler = async (event) => {
         return json(400, { error: "Brak wymaganych pól (route, date, courierNr, courierName)." });
       }
 
-      const current = (await store.get(KEY, { type: "json" })) || {};
-      current[`${route}__${date}`] = {
+      await store.setJSON(entryKey(route, date), {
         courierNr,
         courierName,
         carrier: carrier || null,
         savedAt: new Date().toISOString(),
-      };
-      await store.setJSON(KEY, current);
-      return json(200, { ok: true, data: current });
+      });
+
+      const data = await getAllEntries(store);
+      return json(200, { ok: true, data });
     }
 
     if (event.httpMethod === "DELETE") {
@@ -70,10 +95,10 @@ exports.handler = async (event) => {
         return json(400, { error: "Brak wymaganych pól (route, date)." });
       }
 
-      const current = (await store.get(KEY, { type: "json" })) || {};
-      delete current[`${route}__${date}`];
-      await store.setJSON(KEY, current);
-      return json(200, { ok: true, data: current });
+      await store.delete(entryKey(route, date));
+
+      const data = await getAllEntries(store);
+      return json(200, { ok: true, data });
     }
 
     return json(405, { error: "Method not allowed" });

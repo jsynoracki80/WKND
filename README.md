@@ -39,6 +39,27 @@ funkcje serwerowe. To oznacza:
 - **wymaga wdrożenia na Netlify z aktywnymi Functions** — nie zadziała
   z lokalnego `python -m http.server` ani z otwarcia pliku bezpośrednio.
 
+## Ważna poprawka: utrata deklaracji przy równoczesnych zapisach
+
+**Naprawiony błąd** (jeśli korzystałeś z wcześniejszej wersji): przy
+szybkim, nachodzącym na siebie deklarowaniu kilku tras pod rząd (np.
+trasa A, zaraz potem C, zaraz potem D) mogła gubić się część
+wcześniejszych zapisów — zostawała tylko ostatnia. Przyczyna: obie
+funkcje trzymały wszystkie deklaracje w jednym wspólnym „bloku"
+danych (odczyt całości → zmiana → zapis całości). Dwa równoczesne
+zapisy nadpisywały się nawzajem.
+
+Naprawione: każda deklaracja (trasa+data) ma teraz **własny,
+niezależny klucz** w magazynie — zapisy różnych tras nigdy się nie
+nadpisują, niezależnie od tego jak szybko po sobie następują.
+Potwierdzone testem symulującym dokładnie ten scenariusz.
+
+**Uwaga przy wdrożeniu tej poprawki**: nazwa magazynu (store) się nie
+zmieniła, ale sposób zapisu tak — stare dane zapisane pod starym
+schematem (jeden klucz „all") nie zostaną automatycznie podchwycone
+przez nową wersję. Jeśli miałeś już jakieś deklaracje zapisane, po
+wdrożeniu tej poprawki będziesz musiał wpisać je ponownie (jednorazowo).
+
 ## Baza kurierów
 
 Zaktualizowana na podstawie `kurierzy_aktywne_umowy_...xlsx` (140
