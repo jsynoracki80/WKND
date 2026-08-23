@@ -2,7 +2,7 @@
 // Trasy Weekendowe — logika aplikacji
 // © 2026 Jacek Synoracki — Oddział Słupsk
 // Dane deklaracji/rotacji: Netlify Functions + Blobs (trwałe,
-// wspólne dla wszystkich urządzeń).
+// wspólne dla wszystkich urządzeń, klucze niezależne per wpis).
 // =============================================================
 
 const ALL_ROUTES = ["A","B","C","D","F","G","J","K","M","N","P","Q","S","T","U","V","W","X"];
@@ -11,8 +11,6 @@ const MERGED_LABELS = {
   F: "Domaros",
 };
 
-// Skrócone nazwy przewoźników do wyświetlania w interfejsie.
-// Pełna nazwa prawna jest nadal używana jako klucz w danych/API.
 const CARRIER_ABBREV = {
   '" SZELTRANS" BARTŁOMIEJ SZELĄG': "Szeląg",
   "ANZA PAULINA ZYGOWSKA": "Szostak",
@@ -45,6 +43,7 @@ const CARRIER_ABBREV = {
 
 const API_BASE = "/.netlify/functions";
 const PASSWORD_STORAGE_KEY = "trasy_weekendowe_haslo_v1";
+const SEARCH_DEBOUNCE_MS = 200;
 
 let COURIERS_BY_CARRIER = {};
 let ADDRESSES = [];
@@ -56,11 +55,12 @@ let FLAT_COURIERS = [];
 let KNOWN_CITIES = [];
 const DEFAULT_CITY = "Słupsk";
 
-let DECLARATIONS = {};       // route__date -> {courierNr, courierName, carrier, savedAt}
-let ROTATION_OVERRIDES = {}; // route__date -> {carrier, savedAt}
+let DECLARATIONS = {};
+let ROTATION_OVERRIDES = {};
 let PASSWORD = localStorage.getItem(PASSWORD_STORAGE_KEY) || "";
 let BACKEND_OK = true;
 let filterMissingOnly = false;
+let searchDebounceTimer = null;
 
 const expandedRoutes = new Set();
 const sectionState = new Map();
@@ -89,6 +89,31 @@ const passwordInput = document.getElementById("password-input");
 const progressCount = document.getElementById("progress-count");
 const progressBarFill = document.getElementById("progress-bar-fill");
 const filterMissingCheckbox = document.getElementById("filter-missing");
+const toastEl = document.getElementById("toast");
+
+let toastHideTimer = null;
+function showToast(msg, type = "info", duration = 1400) {
+  clearTimeout(toastHideTimer);
+  toastEl.textContent = msg;
+  toastEl.className = `toast ${type}`;
+  // force reflow so the transition restarts if already visible
+  void toastEl.offsetWidth;
+  toastHideTimer = setTimeout(() => {
+    toastEl.classList.add("hidden");
+  }, duration);
+}
+
+// -------------------------------------------------------------
+// Haptyka / wibracje
+// -------------------------------------------------------------
+
+function vibrate(pattern) {
+  if (navigator.vibrate) {
+    try { navigator.vibrate(pattern); } catch {}
+  }
+}
+const VIBRATE_OK = 25;
+const VIBRATE_ERROR = [15, 60, 15];
 
 // -------------------------------------------------------------
 // Inicjalizacja
@@ -149,7 +174,12 @@ async function init() {
     renderAll();
   });
 
-  searchInput.addEventListener("input", () => renderRoutesList());
+  // #4: debounce wyszukiwania - mniej przebudowan DOM przy pisaniu
+  searchInput.addEventListener("input", () => {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => renderRoutesList(), SEARCH_DEBOUNCE_MS);
+  });
+
   setupVoiceSearch();
 
   await refreshFromBackend();
@@ -305,16 +335,6 @@ function getRotationOverride(route, dateISO) {
   return entry ? entry.carrier : null;
 }
 
-async function setRotationOverride(route, dateISO, carrier) {
-  const data = await apiPost("rotation-overrides", { route, date: dateISO, carrier });
-  ROTATION_OVERRIDES = data.data || ROTATION_OVERRIDES;
-}
-
-async function clearRotationOverride(route, dateISO) {
-  const data = await apiDelete("rotation-overrides", { route, date: dateISO });
-  ROTATION_OVERRIDES = data.data || ROTATION_OVERRIDES;
-}
-
 function effectiveCarrierInfo(route, dateISO) {
   const isRotating = ROTATING_ROUTES.includes(route);
   const override = isRotating ? getRotationOverride(route, dateISO) : null;
@@ -359,21 +379,96 @@ function couriersForCarriers(carrierNames) {
 }
 
 // -------------------------------------------------------------
-// Deklaracje kuriera (backend)
+// Deklaracje / rotacja — zapisy OPTYMISTYCZNE
+//
+// #5: zmiana widoczna natychmiast (lokalnie), zanim serwer
+//     potwierdzi. Jesli zapis sie nie uda - cofamy i pokazujemy
+//     blad (#1: koniec z cichymi niepowodzeniami).
+// #2: po zapisie odswiezamy TYLKO kartke danej trasy, nie cala
+//     liste 18 kart - mniej przebudowan DOM = mniej "gubionych"
+//     dotkniec na wolniejszych urzadzeniach/sieciach.
 // -------------------------------------------------------------
 
 function declKey(route, dateISO) {
   return `${route}__${dateISO}`;
 }
 
-async function declareCourier(route, dateISO, courier) {
-  const data = await apiPost("declarations", { route, date: dateISO, ...courier });
-  DECLARATIONS = data.data || DECLARATIONS;
+async function optimisticDeclare(route, dateISO, courier) {
+  const key = declKey(route, dateISO);
+  const previous = DECLARATIONS[key];
+
+  DECLARATIONS = { ...DECLARATIONS, [key]: courier };
+  refreshRouteCardInPlace(route);
+  showToast("💾 Zapisywanie…", "info", 4000);
+
+  try {
+    const data = await apiPost("declarations", { route, date: dateISO, ...courier });
+    DECLARATIONS = data.data || DECLARATIONS;
+    vibrate(VIBRATE_OK);
+    showToast("✅ Zapisano", "success");
+  } catch (err) {
+    DECLARATIONS = { ...DECLARATIONS };
+    if (previous) DECLARATIONS[key] = previous;
+    else delete DECLARATIONS[key];
+    vibrate(VIBRATE_ERROR);
+    showToast("⚠️ Nie zapisano — spróbuj ponownie", "error", 3000);
+    alert("Nie udało się zapisać deklaracji: " + err.message + "\n\nSpróbuj ponownie.");
+  }
+  refreshRouteCardInPlace(route);
 }
 
-async function removeDeclaration(route, dateISO) {
-  const data = await apiDelete("declarations", { route, date: dateISO });
-  DECLARATIONS = data.data || DECLARATIONS;
+async function optimisticRemoveDeclaration(route, dateISO) {
+  const key = declKey(route, dateISO);
+  const previous = DECLARATIONS[key];
+
+  DECLARATIONS = { ...DECLARATIONS };
+  delete DECLARATIONS[key];
+  refreshRouteCardInPlace(route);
+  showToast("💾 Usuwanie…", "info", 4000);
+
+  try {
+    const data = await apiDelete("declarations", { route, date: dateISO });
+    DECLARATIONS = data.data || DECLARATIONS;
+    vibrate(VIBRATE_OK);
+    showToast("✅ Usunięto", "success");
+  } catch (err) {
+    DECLARATIONS = { ...DECLARATIONS, [key]: previous };
+    vibrate(VIBRATE_ERROR);
+    showToast("⚠️ Nie usunięto — spróbuj ponownie", "error", 3000);
+    alert("Nie udało się usunąć deklaracji: " + err.message + "\n\nSpróbuj ponownie.");
+  }
+  refreshRouteCardInPlace(route);
+}
+
+async function optimisticSetRotationOverride(route, dateISO, carrier) {
+  const key = rotKey(route, dateISO);
+  const previous = ROTATION_OVERRIDES[key];
+
+  if (carrier) {
+    ROTATION_OVERRIDES = { ...ROTATION_OVERRIDES, [key]: { carrier } };
+  } else {
+    ROTATION_OVERRIDES = { ...ROTATION_OVERRIDES };
+    delete ROTATION_OVERRIDES[key];
+  }
+  refreshRouteCardInPlace(route);
+  showToast("💾 Zapisywanie…", "info", 4000);
+
+  try {
+    const data = carrier
+      ? await apiPost("rotation-overrides", { route, date: dateISO, carrier })
+      : await apiDelete("rotation-overrides", { route, date: dateISO });
+    ROTATION_OVERRIDES = data.data || ROTATION_OVERRIDES;
+    vibrate(VIBRATE_OK);
+    showToast("✅ Zapisano", "success");
+  } catch (err) {
+    ROTATION_OVERRIDES = { ...ROTATION_OVERRIDES };
+    if (previous) ROTATION_OVERRIDES[key] = previous;
+    else delete ROTATION_OVERRIDES[key];
+    vibrate(VIBRATE_ERROR);
+    showToast("⚠️ Nie zapisano — spróbuj ponownie", "error", 3000);
+    alert("Nie udało się zapisać zamiany rotacji: " + err.message + "\n\nSpróbuj ponownie.");
+  }
+  refreshRouteCardInPlace(route);
 }
 
 // -------------------------------------------------------------
@@ -384,11 +479,12 @@ function isSectionOpen(key, defaultVal) {
   return sectionState.has(key) ? sectionState.get(key) : defaultVal;
 }
 
-function toggleSection(key, defaultVal) {
+function toggleSection(key, defaultVal, route) {
   sectionState.set(key, !isSectionOpen(key, defaultVal));
+  refreshRouteCardInPlace(route);
 }
 
-function buildAccordion(key, titleHTML, summaryText, defaultOpen, bodyBuilderFn) {
+function buildAccordion(key, titleHTML, summaryText, defaultOpen, route, bodyBuilderFn) {
   const open = isSectionOpen(key, defaultOpen);
 
   const acc = document.createElement("div");
@@ -401,10 +497,7 @@ function buildAccordion(key, titleHTML, summaryText, defaultOpen, bodyBuilderFn)
     <span class="accordion-summary">${escapeHTML(summaryText || "")}</span>
     <span class="chevron ${open ? "open" : ""}">▶</span>
   `;
-  head.addEventListener("click", () => {
-    toggleSection(key, defaultOpen);
-    renderRoutesList();
-  });
+  head.addEventListener("click", () => toggleSection(key, defaultOpen, route));
 
   const body = document.createElement("div");
   body.className = `accordion-body ${open ? "" : "hidden"}`;
@@ -440,21 +533,18 @@ function matchingAddressesForRoute(route, query) {
 }
 
 // -------------------------------------------------------------
-// Render: lista tras (scalona z wyszukiwaniem + filtrem + sortowaniem)
+// Render: lista tras (pelne przebudowanie - tylko przy zmianie
+// daty / wyszukiwania / filtra, NIE przy kazdej deklaracji)
 // -------------------------------------------------------------
 
-function renderRoutesList() {
-  const dateISO = dateInput.value;
-  const query = searchInput.value;
+function currentRouteOrder(dateISO, query) {
   const hasQuery = query.trim().length > 0;
-
   let routes = ALL_ROUTES.filter((r) => routeMatchesQuery(r, query));
 
   if (filterMissingOnly) {
     routes = routes.filter((r) => !DECLARATIONS[declKey(r, dateISO)]);
   }
 
-  // Sortowanie: brakujace najpierw (chyba ze aktywne wyszukiwanie - wtedy zachowaj trafnosc/alfabet)
   routes.sort((a, b) => {
     if (!hasQuery) {
       const aMissing = !DECLARATIONS[declKey(a, dateISO)];
@@ -463,6 +553,16 @@ function renderRoutesList() {
     }
     return a.localeCompare(b);
   });
+
+  return routes;
+}
+
+function renderRoutesList() {
+  const dateISO = dateInput.value;
+  const query = searchInput.value;
+  const hasQuery = query.trim().length > 0;
+
+  const routes = currentRouteOrder(dateISO, query);
 
   allRoutesEl.innerHTML = "";
   noMatchHint.classList.toggle("hidden", routes.length > 0);
@@ -476,6 +576,25 @@ function renderRoutesList() {
   });
 
   updateProgress(dateISO);
+}
+
+// #2: odswieza WYLACZNIE karte jednej trasy w miejscu, bez
+// przebudowywania calej listy 18 kart. Progres/podsumowanie/
+// historia i tak sa lekkie, wiec te odswiezamy zawsze.
+function refreshRouteCardInPlace(route) {
+  const dateISO = dateInput.value;
+  const query = searchInput.value;
+  const existing = document.getElementById(`route-${route}`);
+
+  if (existing) {
+    const hasQuery = query.trim().length > 0;
+    const newCard = buildRouteCard(route, dateISO, hasQuery ? query : "");
+    existing.replaceWith(newCard);
+  }
+
+  updateProgress(dateISO);
+  renderSummary();
+  renderHistory();
 }
 
 function updateProgress(dateISO) {
@@ -508,7 +627,7 @@ function buildRouteCard(route, dateISO, highlightQuery) {
   head.addEventListener("click", () => {
     if (expandedRoutes.has(route)) expandedRoutes.delete(route);
     else expandedRoutes.add(route);
-    renderRoutesList();
+    refreshRouteCardInPlace(route);
   });
 
   const body = document.createElement("div");
@@ -526,29 +645,26 @@ function buildRouteCardBody(route, dateISO, info, declared, highlightQuery) {
   const wrap = document.createElement("div");
   wrap.style.paddingTop = "10px";
 
-  // === 1. KURIER — pierwsze, najwazniejsze ===
   const courierKey = `${route}::courier`;
   const courierSummary = declared ? declared.courierName : "brak deklaracji";
   wrap.appendChild(
-    buildAccordion(courierKey, "👤 Kurier na tę trasę", courierSummary, !declared, () => {
+    buildAccordion(courierKey, "👤 Kurier na tę trasę", courierSummary, !declared, route, () => {
       const box = document.createElement("div");
       renderCourierSlot(box, route, dateISO, info, declared);
       return box;
     })
   );
 
-  // === 2. ROTACJA (tylko trasy N/S/P/U/G) ===
   if (info.isRotating) {
     const rotKeyName = `${route}::rotation`;
     const rotSummary = info.overridden ? "zamieniono" : "wg grafiku";
     wrap.appendChild(
-      buildAccordion(rotKeyName, "🔁 Zamiana kolejności rotacji", rotSummary, false, () => {
+      buildAccordion(rotKeyName, "🔁 Zamiana kolejności rotacji", rotSummary, false, route, () => {
         return buildRotationBody(route, dateISO, info);
       })
     );
   }
 
-  // === 3. ADRESY — na koncu; jesli aktywne wyszukiwanie, pokaz dopasowane ===
   const addrs = highlightQuery
     ? matchingAddressesForRoute(route, highlightQuery)
     : ADDRESSES_BY_ROUTE[route] || [];
@@ -557,7 +673,7 @@ function buildRouteCardBody(route, dateISO, info, declared, highlightQuery) {
     const addrKey = `${route}::addresses`;
     const label = highlightQuery ? `📍 Pasujące adresy` : `📍 Przykładowe adresy`;
     wrap.appendChild(
-      buildAccordion(addrKey, label, `${addrs.length} z ${allAddrs.length}`, !!highlightQuery, () => {
+      buildAccordion(addrKey, label, `${addrs.length} z ${allAddrs.length}`, !!highlightQuery, route, () => {
         const chipWrap = document.createElement("div");
         addrs.slice(0, 10).forEach((a) => {
           const chip = document.createElement("span");
@@ -600,17 +716,7 @@ function buildRotationBody(route, dateISO, info) {
   select.addEventListener("change", async (e) => {
     const val = e.target.value;
     select.disabled = true;
-    try {
-      if (val === "") {
-        await clearRotationOverride(route, dateISO);
-      } else {
-        await setRotationOverride(route, dateISO, val);
-      }
-      renderAll();
-    } catch (err) {
-      alert(err.message || "Nie udało się zapisać zamiany rotacji.");
-      select.disabled = false;
-    }
+    await optimisticSetRotationOverride(route, dateISO, val || null);
   });
 
   wrap.appendChild(select);
@@ -644,16 +750,7 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
     btn.className = "remove-btn";
     btn.textContent = "✕";
     btn.disabled = !BACKEND_OK;
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      try {
-        await removeDeclaration(route, dateISO);
-        renderAll();
-      } catch (err) {
-        alert(err.message || "Nie udało się usunąć deklaracji.");
-        btn.disabled = false;
-      }
-    });
+    btn.addEventListener("click", () => optimisticRemoveDeclaration(route, dateISO));
     box.appendChild(btn);
     slot.appendChild(box);
     if (isSwap) {
@@ -690,21 +787,19 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
     opt.textContent = `${o.imie} ${o.nazwisko} (${o.nr})`;
     quickSelect.appendChild(opt);
   });
-  quickSelect.addEventListener("change", async (e) => {
+  quickSelect.addEventListener("change", (e) => {
     const opt = quickOptions.find((o) => o.nr === e.target.value);
-    if (!opt) return;
-    quickSelect.disabled = true;
-    try {
-      await declareCourier(route, dateISO, {
-        courierNr: opt.nr,
-        courierName: `${opt.imie} ${opt.nazwisko}`,
-        carrier: opt.carrier,
-      });
-      renderAll();
-    } catch (err) {
-      alert(err.message || "Nie udało się zapisać deklaracji.");
-      quickSelect.disabled = false;
+    if (!opt) {
+      // #1: bylo cicho - teraz jawny sygnal ze wybor sie nie rozpoznal
+      vibrate(VIBRATE_ERROR);
+      alert("Nie rozpoznano wybranego kuriera — spróbuj wybrać ponownie.");
+      return;
     }
+    optimisticDeclare(route, dateISO, {
+      courierNr: opt.nr,
+      courierName: `${opt.imie} ${opt.nazwisko}`,
+      carrier: opt.carrier,
+    });
   });
   slot.appendChild(quickSelect);
 
@@ -715,7 +810,7 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
   toggle.addEventListener("click", () => {
     if (isSwapOpen) swapSearchOpen.delete(swapKey);
     else swapSearchOpen.add(swapKey);
-    renderRoutesList();
+    refreshRouteCardInPlace(route);
   });
   slot.appendChild(toggle);
 
@@ -756,18 +851,13 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
         row.style.cssText =
           "padding:8px 9px; border-radius:8px; font-size:13px; cursor:pointer; border:1px solid #F0ECF6; margin-bottom:5px;";
         row.innerHTML = `<strong>${escapeHTML(m.imie)} ${escapeHTML(m.nazwisko)}</strong> (${escapeHTML(m.nr)})<br><span style="color:#9186A0;font-size:11.5px;">${escapeHTML(abbrevCarrier(m.carrier))}</span>`;
-        row.addEventListener("click", async () => {
-          try {
-            await declareCourier(route, dateISO, {
-              courierNr: m.nr,
-              courierName: `${m.imie} ${m.nazwisko}`,
-              carrier: m.carrier,
-            });
-            swapSearchOpen.delete(swapKey);
-            renderAll();
-          } catch (err) {
-            alert(err.message || "Nie udało się zapisać deklaracji.");
-          }
+        row.addEventListener("click", () => {
+          swapSearchOpen.delete(swapKey);
+          optimisticDeclare(route, dateISO, {
+            courierNr: m.nr,
+            courierName: `${m.imie} ${m.nazwisko}`,
+            carrier: m.carrier,
+          });
         });
         resultsBox.appendChild(row);
       });
@@ -851,7 +941,21 @@ function renderHistory() {
 
 // -------------------------------------------------------------
 // Render: podsumowanie zadeklarowanych kurierow (biezaca data)
+// + #8: eksport do WhatsApp
 // -------------------------------------------------------------
+
+function buildWhatsAppText(dateISO) {
+  const entries = Object.entries(DECLARATIONS)
+    .filter(([k]) => k.endsWith("__" + dateISO))
+    .map(([k, v]) => ({ route: k.split("__")[0], ...v }))
+    .sort((a, b) => a.route.localeCompare(b.route));
+
+  const lines = [`*Trasy Weekendowe — sobota ${fmtDatePL(dateISO)}*`, ""];
+  entries.forEach((e) => {
+    lines.push(`Trasa ${e.route} — ${e.courierName} (${e.courierNr})`);
+  });
+  return lines.join("\n");
+}
 
 function renderSummary() {
   const dateISO = dateInput.value;
@@ -878,18 +982,45 @@ function renderSummary() {
       `;
       const btn = document.createElement("button");
       btn.className = "remove-btn";
-      btn.addEventListener("click", async () => {
-        try {
-          await removeDeclaration(d.route, dateISO);
-          renderAll();
-        } catch (err) {
-          alert(err.message || "Nie udało się usunąć deklaracji.");
-        }
-      });
+      btn.addEventListener("click", () => optimisticRemoveDeclaration(d.route, dateISO));
       btn.textContent = "✕";
       row.appendChild(btn);
       declaredListEl.appendChild(row);
     });
+
+  let waRow = document.getElementById("wa-export-row");
+  if (!waRow) {
+    waRow = document.createElement("div");
+    waRow.id = "wa-export-row";
+    waRow.className = "wa-export-row";
+    declaredSummary.appendChild(waRow);
+  }
+  waRow.innerHTML = "";
+
+  const waBtn = document.createElement("button");
+  waBtn.className = "wa-btn";
+  waBtn.innerHTML = "📤 Wyślij do WhatsApp";
+  waBtn.addEventListener("click", () => {
+    const text = buildWhatsAppText(dateISO);
+    const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
+    window.open(url, "_blank");
+  });
+  waRow.appendChild(waBtn);
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "wa-btn secondary";
+  copyBtn.innerHTML = "📋 Kopiuj tekst";
+  copyBtn.addEventListener("click", async () => {
+    const text = buildWhatsAppText(dateISO);
+    try {
+      await navigator.clipboard.writeText(text);
+      copyBtn.innerHTML = "✅ Skopiowano";
+      setTimeout(() => (copyBtn.innerHTML = "📋 Kopiuj tekst"), 1500);
+    } catch {
+      alert("Nie udało się skopiować — zaznacz i skopiuj ręcznie:\n\n" + text);
+    }
+  });
+  waRow.appendChild(copyBtn);
 }
 
 // -------------------------------------------------------------

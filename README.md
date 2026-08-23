@@ -60,6 +60,32 @@ schematem (jeden klucz „all") nie zostaną automatycznie podchwycone
 przez nową wersję. Jeśli miałeś już jakieś deklaracje zapisane, po
 wdrożeniu tej poprawki będziesz musiał wpisać je ponownie (jednorazowo).
 
+## Nowości: wydajność i niezawodność zapisu
+
+Naprawiono prawdopodobną przyczynę „3-5 prób zanim się zapisze":
+
+- **Optymistyczna aktualizacja** — po wybraniu kuriera ✅ pojawia się
+  natychmiast (jeszcze zanim serwer potwierdzi zapis), zamiast
+  czekać na odpowiedź sieci. Jeśli zapis się jednak nie uda, zmiana
+  cofa się automatycznie z czytelnym komunikatem błędu.
+- **Odświeżanie tylko jednej karty trasy**, nie całej listy 18 —
+  wcześniej każda deklaracja przebudowywała wszystkie karty od zera,
+  co na wolniejszym połączeniu mogło powodować „gubienie" dotknięć.
+- **Koniec cichych niepowodzeń** — każdy błąd zapisu (złe hasło,
+  brak sieci, nierozpoznany wybór) pokazuje teraz wyraźny komunikat
+  i delikatną wibrację, zamiast nic nie robić.
+- **Wskaźnik zapisu** — mały pasek u dołu ekranu („💾 Zapisywanie…"
+  → „✅ Zapisano") przy każdej akcji.
+- **Wibracje (haptyka)** — krótkie potwierdzenie przy udanym
+  zapisie, inny wzorzec przy błędzie — czuć telefonem, nie trzeba
+  patrzeć na ekran.
+- **Opóźnione wyszukiwanie (debounce)** — lista tras filtruje się
+  ~200ms po ostatnim wpisanym znaku, a nie po każdym znaku z osobna.
+- **Eksport do WhatsApp** — w panelu „Zadeklarowani kurierzy" dwa
+  przyciski: „📤 Wyślij do WhatsApp” (otwiera wybór czatu z gotowym
+  tekstem: trasa, imię i nazwisko, nr SLU) oraz „📋 Kopiuj tekst”
+  jako zapasowa opcja.
+
 ## Baza kurierów
 
 Zaktualizowana na podstawie `kurierzy_aktywne_umowy_...xlsx` (140
