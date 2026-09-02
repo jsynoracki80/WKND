@@ -17,7 +17,6 @@ const CARRIER_ABBREV = {
   "AZLTRANS Daniel Gąsiorek": "Daniel G.",
   "DAWID WÓDZ Trans": "Wódz D.",
   'FIRMA HANDLOWO-USŁUGOWA "MIKOTRANS" DAGOMIR GĄSIOREK': "Dagosz",
-  "FIRMA USŁUGOWA KATARZYNA GÓRSKA": "Górski",
   "FIRMA USŁUGOWA KLAUDIA WIŚNIEWSKA": "Wojtas",
   'FIRMA USŁUGOWO TRANSPORTOWA "GREGOR" Grzegorz Kozioł': "Kozioł",
   "GALERIA PREZENTÓW STUDIO VIDEO EDIT GRZEGORZ KREFTA": "Krefta",
@@ -39,6 +38,7 @@ const CARRIER_ABBREV = {
   "TRANSMO Marcin Orwat": "Orwat",
   "USŁUGI TRANSPORTOWE CZESŁAW DOMAROS": "Domaros",
   "USŁUGI TRANSPORTOWE SEBASTIAN DOMAROS": "Domaros",
+  "POLTRANS Dominika Underlich": "Poltrans",
 };
 
 const API_BASE = "/.netlify/functions";
@@ -96,16 +96,11 @@ function showToast(msg, type = "info", duration = 1400) {
   clearTimeout(toastHideTimer);
   toastEl.textContent = msg;
   toastEl.className = `toast ${type}`;
-  // force reflow so the transition restarts if already visible
   void toastEl.offsetWidth;
   toastHideTimer = setTimeout(() => {
     toastEl.classList.add("hidden");
   }, duration);
 }
-
-// -------------------------------------------------------------
-// Haptyka / wibracje
-// -------------------------------------------------------------
 
 function vibrate(pattern) {
   if (navigator.vibrate) {
@@ -174,7 +169,6 @@ async function init() {
     renderAll();
   });
 
-  // #4: debounce wyszukiwania - mniej przebudowan DOM przy pisaniu
   searchInput.addEventListener("input", () => {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(() => renderRoutesList(), SEARCH_DEBOUNCE_MS);
@@ -380,13 +374,6 @@ function couriersForCarriers(carrierNames) {
 
 // -------------------------------------------------------------
 // Deklaracje / rotacja — zapisy OPTYMISTYCZNE
-//
-// #5: zmiana widoczna natychmiast (lokalnie), zanim serwer
-//     potwierdzi. Jesli zapis sie nie uda - cofamy i pokazujemy
-//     blad (#1: koniec z cichymi niepowodzeniami).
-// #2: po zapisie odswiezamy TYLKO kartke danej trasy, nie cala
-//     liste 18 kart - mniej przebudowan DOM = mniej "gubionych"
-//     dotkniec na wolniejszych urzadzeniach/sieciach.
 // -------------------------------------------------------------
 
 function declKey(route, dateISO) {
@@ -533,8 +520,7 @@ function matchingAddressesForRoute(route, query) {
 }
 
 // -------------------------------------------------------------
-// Render: lista tras (pelne przebudowanie - tylko przy zmianie
-// daty / wyszukiwania / filtra, NIE przy kazdej deklaracji)
+// Render: lista tras
 // -------------------------------------------------------------
 
 function currentRouteOrder(dateISO, query) {
@@ -578,9 +564,6 @@ function renderRoutesList() {
   updateProgress(dateISO);
 }
 
-// #2: odswieza WYLACZNIE karte jednej trasy w miejscu, bez
-// przebudowywania calej listy 18 kart. Progres/podsumowanie/
-// historia i tak sa lekkie, wiec te odswiezamy zawsze.
 function refreshRouteCardInPlace(route) {
   const dateISO = dateInput.value;
   const query = searchInput.value;
@@ -790,7 +773,6 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
   quickSelect.addEventListener("change", (e) => {
     const opt = quickOptions.find((o) => o.nr === e.target.value);
     if (!opt) {
-      // #1: bylo cicho - teraz jawny sygnal ze wybor sie nie rozpoznal
       vibrate(VIBRATE_ERROR);
       alert("Nie rozpoznano wybranego kuriera — spróbuj wybrać ponownie.");
       return;
@@ -940,8 +922,7 @@ function renderHistory() {
 }
 
 // -------------------------------------------------------------
-// Render: podsumowanie zadeklarowanych kurierow (biezaca data)
-// + #8: eksport do WhatsApp
+// Render: podsumowanie zadeklarowanych kurierow + eksport WhatsApp
 // -------------------------------------------------------------
 
 function buildWhatsAppText(dateISO) {

@@ -3,12 +3,9 @@
 // Trwały, wspólny magazyn (Netlify Blobs) — dostępny z każdego
 // urządzenia, przetrwa zamknięcie przeglądarki / redeploy strony.
 //
-// WAŻNE: każda deklaracja (trasa+data) ma WŁASNY, niezależny klucz
-// w magazynie (zamiast jednego wspólnego obiektu "all"). Dzięki temu
-// dwa równoczesne zapisy różnych tras nigdy się nie nadpisują —
-// wcześniej (odczyt-modyfikacja-zapis całości) prowadziło to do
-// gubienia wcześniejszych deklaracji przy szybkich, nachodzących
-// na siebie akcjach.
+// Każda deklaracja (trasa+data) ma WŁASNY, niezależny klucz w
+// magazynie (zamiast jednego wspólnego obiektu "all"). Dzięki temu
+// dwa równoczesne zapisy różnych tras nigdy się nie nadpisują.
 // =============================================================
 
 const { connectLambda, getStore } = require("@netlify/blobs");

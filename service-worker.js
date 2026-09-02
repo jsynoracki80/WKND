@@ -1,4 +1,4 @@
-const CACHE_NAME = "trasy-weekendowe-v2";
+const CACHE_NAME = "trasy-weekendowe-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -32,7 +32,6 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Stale-while-revalidate
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 

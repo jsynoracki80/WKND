@@ -1,9 +1,6 @@
 // =============================================================
 // Netlify Function: ręczne zamiany kolejności rotacji (N/S/P/U/G)
-//
-// WAŻNE: każda zamiana (trasa+data) ma WŁASNY, niezależny klucz —
-// patrz komentarz w declarations.js po co (unikanie utraty zapisów
-// przy nachodzących na siebie równoczesnych operacjach).
+// Każda zamiana (trasa+data) ma WŁASNY, niezależny klucz.
 // =============================================================
 
 const { connectLambda, getStore } = require("@netlify/blobs");
