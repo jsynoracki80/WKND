@@ -1,17 +1,12 @@
 // =============================================================
-// Netlify Function: deklaracje kurierów na trasy weekendowe
-// Trwały, wspólny magazyn (Netlify Blobs) — dostępny z każdego
-// urządzenia, przetrwa zamknięcie przeglądarki / redeploy strony.
-//
-// Każda deklaracja (trasa+data) ma WŁASNY, niezależny klucz w
-// magazynie (zamiast jednego wspólnego obiektu "all"). Dzięki temu
-// dwa równoczesne zapisy różnych tras nigdy się nie nadpisują.
+// Netlify Function: prowizje kurierów (PURE) — jeden wpis na sobotę
+// Historia zachowana: kazda sobota to osobny klucz, nic nie ginie.
 // =============================================================
 
 const { connectLambda, getStore } = require("@netlify/blobs");
 
 const PASSWORD = process.env.WEEKEND_APP_PASSWORD;
-const STORE_NAME = "weekend-declarations";
+const STORE_NAME = "weekend-commissions";
 
 const HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -22,10 +17,6 @@ const HEADERS = {
 
 function json(statusCode, body) {
   return { statusCode, headers: HEADERS, body: JSON.stringify(body) };
-}
-
-function entryKey(route, date, slot) {
-  return slot === 2 ? `${route}__${date}__2` : `${route}__${date}`;
 }
 
 async function getAllEntries(store) {
@@ -64,16 +55,15 @@ exports.handler = async (event) => {
         return json(401, { error: "Nieprawidłowe hasło." });
       }
 
-      const { route, date, courierNr, courierName, carrier, slot } = body;
-      if (!route || !date || !courierNr || !courierName) {
-        return json(400, { error: "Brak wymaganych pól (route, date, courierNr, courierName)." });
+      const { date, rows, fileName } = body;
+      if (!date || !Array.isArray(rows)) {
+        return json(400, { error: "Brak wymaganych pól (date, rows[])." });
       }
 
-      await store.setJSON(entryKey(route, date, slot), {
-        courierNr,
-        courierName,
-        carrier: carrier || null,
-        savedAt: new Date().toISOString(),
+      await store.setJSON(date, {
+        rows,
+        fileName: fileName || null,
+        uploadedAt: new Date().toISOString(),
       });
 
       const data = await getAllEntries(store);
@@ -87,12 +77,12 @@ exports.handler = async (event) => {
         return json(401, { error: "Nieprawidłowe hasło." });
       }
 
-      const { route, date, slot } = body;
-      if (!route || !date) {
-        return json(400, { error: "Brak wymaganych pól (route, date)." });
+      const { date } = body;
+      if (!date) {
+        return json(400, { error: "Brak wymaganego pola (date)." });
       }
 
-      await store.delete(entryKey(route, date, slot));
+      await store.delete(date);
 
       const data = await getAllEntries(store);
       return json(200, { ok: true, data });

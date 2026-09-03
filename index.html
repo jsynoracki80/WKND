@@ -11,6 +11,7 @@
 <link rel="icon" href="icons/icon-192.png" />
 <link rel="apple-touch-icon" href="icons/icon-192.png" />
 <link rel="stylesheet" href="style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -84,6 +85,33 @@
     <section class="section-heading">📜 Historia (minione soboty)</section>
     <section id="history" class="results"></section>
     <div id="history-empty" class="empty-hint hidden">Brak zapisanych deklaracji z minionych sobót.</div>
+
+    <section class="section-heading">💰 Dopłaty</section>
+
+    <section class="card">
+      <div class="field-label">📤 Prowizje PURE — sobota <span id="doplaty-date-label"></span></div>
+      <div id="commission-status" class="commission-status"></div>
+      <input type="file" id="commission-file-input" accept=".xlsx" class="hidden" />
+      <button id="commission-upload-btn" class="declare-btn" type="button">📤 Wgraj plik prowizji (.xlsx)</button>
+    </section>
+
+    <section class="card">
+      <div class="settings-head" id="rates-toggle">
+        <span class="field-label" style="margin-bottom:0;">⚙️ Stawki dniówki per trasa</span>
+        <span class="chevron" id="rates-chevron">▶</span>
+      </div>
+      <div id="rates-body" class="settings-body hidden">
+        <div id="rates-grid" class="rates-grid"></div>
+        <button id="rates-save-btn" class="declare-btn" type="button" style="margin-top:10px;">💾 Zapisz stawki</button>
+      </div>
+    </section>
+
+    <section id="doplaty-table" class="results"></section>
+    <div id="doplaty-empty" class="empty-hint hidden">Brak zadeklarowanych kurierów na tę sobotę — nie ma czego rozliczać.</div>
+
+    <section class="section-heading">📜 Historia dopłat</section>
+    <section id="doplaty-history" class="results"></section>
+    <div id="doplaty-history-empty" class="empty-hint hidden">Brak zapisanych prowizji z minionych sobót.</div>
 
   </main>
 

@@ -1,8 +1,7 @@
 // =============================================================
 // Trasy Weekendowe — logika aplikacji
 // © 2026 Jacek Synoracki — Oddział Słupsk
-// Dane deklaracji/rotacji: Netlify Functions + Blobs (trwałe,
-// wspólne dla wszystkich urządzeń, klucze niezależne per wpis).
+// Dane deklaracji/rotacji/prowizji: Netlify Functions + Blobs.
 // =============================================================
 
 const ALL_ROUTES = ["A","B","C","D","F","G","J","K","M","N","P","Q","S","T","U","V","W","X"];
@@ -55,8 +54,11 @@ let FLAT_COURIERS = [];
 let KNOWN_CITIES = [];
 const DEFAULT_CITY = "Słupsk";
 
-let DECLARATIONS = {};
+let DECLARATIONS = {};    // route__date -> kurier 1
+let DECLARATIONS2 = {};   // route__date -> kurier 2 (opcjonalny)
 let ROTATION_OVERRIDES = {};
+let COMMISSIONS = {};     // data (YYYY-MM-DD) -> { rows:[{nr,imie,nazwisko,carrier,pureSum}], uploadedAt, fileName }
+let DNIOWKA_RATES = {};   // trasa -> kwota
 let PASSWORD = localStorage.getItem(PASSWORD_STORAGE_KEY) || "";
 let BACKEND_OK = true;
 let filterMissingOnly = false;
@@ -65,6 +67,7 @@ let searchDebounceTimer = null;
 const expandedRoutes = new Set();
 const sectionState = new Map();
 const swapSearchOpen = new Set();
+const secondSlotOpen = new Set(); // route__date - user otworzyl "dodaj drugiego kuriera"
 
 const dateInput = document.getElementById("date-input");
 const dateWarning = document.getElementById("date-warning");
@@ -90,6 +93,21 @@ const progressCount = document.getElementById("progress-count");
 const progressBarFill = document.getElementById("progress-bar-fill");
 const filterMissingCheckbox = document.getElementById("filter-missing");
 const toastEl = document.getElementById("toast");
+
+// Doplaty DOM
+const doplatyDateLabel = document.getElementById("doplaty-date-label");
+const commissionStatus = document.getElementById("commission-status");
+const commissionFileInput = document.getElementById("commission-file-input");
+const commissionUploadBtn = document.getElementById("commission-upload-btn");
+const ratesToggle = document.getElementById("rates-toggle");
+const ratesBody = document.getElementById("rates-body");
+const ratesChevron = document.getElementById("rates-chevron");
+const ratesGrid = document.getElementById("rates-grid");
+const ratesSaveBtn = document.getElementById("rates-save-btn");
+const doplatyTable = document.getElementById("doplaty-table");
+const doplatyEmpty = document.getElementById("doplaty-empty");
+const doplatyHistoryEl = document.getElementById("doplaty-history");
+const doplatyHistoryEmpty = document.getElementById("doplaty-history-empty");
 
 let toastHideTimer = null;
 function showToast(msg, type = "info", duration = 1400) {
@@ -126,6 +144,11 @@ async function init() {
     settingsChevron.classList.toggle("open");
   });
 
+  ratesToggle.addEventListener("click", () => {
+    ratesBody.classList.toggle("hidden");
+    ratesChevron.classList.toggle("open");
+  });
+
   dateChips.forEach((chip) => {
     chip.addEventListener("click", () => {
       const offset = parseInt(chip.dataset.offset, 10);
@@ -139,6 +162,10 @@ async function init() {
     filterMissingOnly = filterMissingCheckbox.checked;
     renderRoutesList();
   });
+
+  commissionUploadBtn.addEventListener("click", () => commissionFileInput.click());
+  commissionFileInput.addEventListener("change", handleCommissionFileSelected);
+  ratesSaveBtn.addEventListener("click", saveDniowkaRates);
 
   const [couriers, addresses, routeCarriers, rotation, rotationPools] = await Promise.all([
     fetchJSON("data/couriers.json"),
@@ -219,14 +246,30 @@ function buildKnownCities() {
 // Backend (Netlify Functions + Blobs)
 // -------------------------------------------------------------
 
+function splitDeclarations(raw) {
+  const primary = {};
+  const secondary = {};
+  Object.entries(raw || {}).forEach(([k, v]) => {
+    if (k.endsWith("__2")) secondary[k.slice(0, -3)] = v;
+    else primary[k] = v;
+  });
+  return { primary, secondary };
+}
+
 async function refreshFromBackend() {
   try {
-    const [decl, rot] = await Promise.all([
+    const [declRaw, rot, comm, rates] = await Promise.all([
       fetch(`${API_BASE}/declarations`).then((r) => r.json()),
       fetch(`${API_BASE}/rotation-overrides`).then((r) => r.json()),
+      fetch(`${API_BASE}/commissions`).then((r) => r.json()),
+      fetch(`${API_BASE}/dniowka-rates`).then((r) => r.json()),
     ]);
-    DECLARATIONS = decl && typeof decl === "object" ? decl : {};
+    const { primary, secondary } = splitDeclarations(declRaw);
+    DECLARATIONS = primary;
+    DECLARATIONS2 = secondary;
     ROTATION_OVERRIDES = rot && typeof rot === "object" ? rot : {};
+    COMMISSIONS = comm && typeof comm === "object" ? comm : {};
+    DNIOWKA_RATES = rates && typeof rates === "object" ? rates : {};
     BACKEND_OK = true;
     syncErrorBanner.classList.add("hidden");
   } catch (err) {
@@ -266,6 +309,9 @@ function renderAll() {
   renderRoutesList();
   renderHistory();
   renderSummary();
+  renderDoplaty();
+  renderRatesGrid();
+  renderDoplatyHistory();
 }
 
 // -------------------------------------------------------------
@@ -380,23 +426,33 @@ function declKey(route, dateISO) {
   return `${route}__${dateISO}`;
 }
 
-async function optimisticDeclare(route, dateISO, courier) {
+async function optimisticDeclare(route, dateISO, courier, slot = 1) {
   const key = declKey(route, dateISO);
-  const previous = DECLARATIONS[key];
+  const map = slot === 2 ? DECLARATIONS2 : DECLARATIONS;
+  const previous = map[key];
 
-  DECLARATIONS = { ...DECLARATIONS, [key]: courier };
+  if (slot === 2) DECLARATIONS2 = { ...DECLARATIONS2, [key]: courier };
+  else DECLARATIONS = { ...DECLARATIONS, [key]: courier };
   refreshRouteCardInPlace(route);
   showToast("💾 Zapisywanie…", "info", 4000);
 
   try {
-    const data = await apiPost("declarations", { route, date: dateISO, ...courier });
-    DECLARATIONS = data.data || DECLARATIONS;
+    const data = await apiPost("declarations", { route, date: dateISO, ...courier, slot });
+    const { primary, secondary } = splitDeclarations(data.data);
+    DECLARATIONS = primary;
+    DECLARATIONS2 = secondary;
     vibrate(VIBRATE_OK);
     showToast("✅ Zapisano", "success");
   } catch (err) {
-    DECLARATIONS = { ...DECLARATIONS };
-    if (previous) DECLARATIONS[key] = previous;
-    else delete DECLARATIONS[key];
+    if (slot === 2) {
+      DECLARATIONS2 = { ...DECLARATIONS2 };
+      if (previous) DECLARATIONS2[key] = previous;
+      else delete DECLARATIONS2[key];
+    } else {
+      DECLARATIONS = { ...DECLARATIONS };
+      if (previous) DECLARATIONS[key] = previous;
+      else delete DECLARATIONS[key];
+    }
     vibrate(VIBRATE_ERROR);
     showToast("⚠️ Nie zapisano — spróbuj ponownie", "error", 3000);
     alert("Nie udało się zapisać deklaracji: " + err.message + "\n\nSpróbuj ponownie.");
@@ -404,22 +460,31 @@ async function optimisticDeclare(route, dateISO, courier) {
   refreshRouteCardInPlace(route);
 }
 
-async function optimisticRemoveDeclaration(route, dateISO) {
+async function optimisticRemoveDeclaration(route, dateISO, slot = 1) {
   const key = declKey(route, dateISO);
-  const previous = DECLARATIONS[key];
+  const map = slot === 2 ? DECLARATIONS2 : DECLARATIONS;
+  const previous = map[key];
 
-  DECLARATIONS = { ...DECLARATIONS };
-  delete DECLARATIONS[key];
+  if (slot === 2) {
+    DECLARATIONS2 = { ...DECLARATIONS2 };
+    delete DECLARATIONS2[key];
+  } else {
+    DECLARATIONS = { ...DECLARATIONS };
+    delete DECLARATIONS[key];
+  }
   refreshRouteCardInPlace(route);
   showToast("💾 Usuwanie…", "info", 4000);
 
   try {
-    const data = await apiDelete("declarations", { route, date: dateISO });
-    DECLARATIONS = data.data || DECLARATIONS;
+    const data = await apiDelete("declarations", { route, date: dateISO, slot });
+    const { primary, secondary } = splitDeclarations(data.data);
+    DECLARATIONS = primary;
+    DECLARATIONS2 = secondary;
     vibrate(VIBRATE_OK);
     showToast("✅ Usunięto", "success");
   } catch (err) {
-    DECLARATIONS = { ...DECLARATIONS, [key]: previous };
+    if (slot === 2) DECLARATIONS2 = { ...DECLARATIONS2, [key]: previous };
+    else DECLARATIONS = { ...DECLARATIONS, [key]: previous };
     vibrate(VIBRATE_ERROR);
     showToast("⚠️ Nie usunięto — spróbuj ponownie", "error", 3000);
     alert("Nie udało się usunąć deklaracji: " + err.message + "\n\nSpróbuj ponownie.");
@@ -493,6 +558,20 @@ function buildAccordion(key, titleHTML, summaryText, defaultOpen, route, bodyBui
   acc.appendChild(head);
   acc.appendChild(body);
   return acc;
+}
+
+// -------------------------------------------------------------
+// Kurier(zy) na trasie — wspolny helper do wyswietlania
+// -------------------------------------------------------------
+
+function courierPairText(route, dateISO) {
+  const key = declKey(route, dateISO);
+  const p1 = DECLARATIONS[key];
+  const p2 = DECLARATIONS2[key];
+  if (!p1) return null;
+  let text = p1.courierName;
+  if (p2) text += ` + ${p2.courierName}`;
+  return text;
 }
 
 // -------------------------------------------------------------
@@ -578,6 +657,8 @@ function refreshRouteCardInPlace(route) {
   updateProgress(dateISO);
   renderSummary();
   renderHistory();
+  renderDoplaty();
+  renderDoplatyHistory();
 }
 
 function updateProgress(dateISO) {
@@ -591,6 +672,7 @@ function buildRouteCard(route, dateISO, highlightQuery) {
   const info = effectiveCarrierInfo(route, dateISO);
   const carrierLabel = carrierDisplayName(route, info.carriers);
   const declared = DECLARATIONS[declKey(route, dateISO)];
+  const pairText = courierPairText(route, dateISO);
   const isOpen = expandedRoutes.has(route);
 
   const card = document.createElement("div");
@@ -603,7 +685,7 @@ function buildRouteCard(route, dateISO, highlightQuery) {
     <span class="route-badge-lg">${route}</span>
     <div class="route-head-info">
       <div class="route-head-carrier">${escapeHTML(carrierLabel)}${info.overridden ? '<span class="override-badge">zamiana kolejki</span>' : ""}</div>
-      <div class="route-head-status ${declared ? "ok" : ""}">${declared ? "✅ " + escapeHTML(declared.courierName) : "brak zadeklarowanego kuriera"}</div>
+      <div class="route-head-status ${declared ? "ok" : ""}">${pairText ? "✅ " + escapeHTML(pairText) : "brak zadeklarowanego kuriera"}</div>
     </div>
     <span class="chevron ${isOpen ? "open" : ""}">▶</span>
   `;
@@ -629,11 +711,12 @@ function buildRouteCardBody(route, dateISO, info, declared, highlightQuery) {
   wrap.style.paddingTop = "10px";
 
   const courierKey = `${route}::courier`;
-  const courierSummary = declared ? declared.courierName : "brak deklaracji";
+  const pairText = courierPairText(route, dateISO);
+  const courierSummary = pairText || "brak deklaracji";
   wrap.appendChild(
     buildAccordion(courierKey, "👤 Kurier na tę trasę", courierSummary, !declared, route, () => {
       const box = document.createElement("div");
-      renderCourierSlot(box, route, dateISO, info, declared);
+      renderCourierSection(box, route, dateISO, info);
       return box;
     })
   );
@@ -719,7 +802,66 @@ function buildRotationBody(route, dateISO, info) {
   return wrap;
 }
 
-function renderCourierSlot(slot, route, dateISO, info, declared) {
+// -------------------------------------------------------------
+// Sekcja kuriera: slot 1 (zawsze) + slot 2 (opcjonalny)
+// -------------------------------------------------------------
+
+function renderCourierSection(container, route, dateISO, info) {
+  container.innerHTML = "";
+  const key = declKey(route, dateISO);
+  const declared1 = DECLARATIONS[key];
+  const declared2 = DECLARATIONS2[key];
+
+  const slot1Box = document.createElement("div");
+  renderCourierSlot(slot1Box, route, dateISO, info, declared1, 1);
+  container.appendChild(slot1Box);
+
+  // Drugi kurier: widoczny tylko jesli slot1 wypelniony
+  if (declared1) {
+    if (declared2) {
+      const label = document.createElement("div");
+      label.style.cssText = "font-size:11px;font-weight:700;color:var(--purple);margin-top:10px;margin-bottom:4px;";
+      label.textContent = "Drugi kurier na tej trasie:";
+      container.appendChild(label);
+
+      const slot2Box = document.createElement("div");
+      slot2Box.className = "second-courier-box";
+      renderCourierSlot(slot2Box, route, dateISO, info, declared2, 2);
+      container.appendChild(slot2Box);
+    } else if (secondSlotOpen.has(key)) {
+      const label = document.createElement("div");
+      label.style.cssText = "font-size:11px;font-weight:700;color:var(--purple);margin-top:10px;margin-bottom:4px;";
+      label.textContent = "Drugi kurier na tej trasie:";
+      container.appendChild(label);
+
+      const slot2Box = document.createElement("div");
+      slot2Box.className = "second-courier-box";
+      renderCourierSlot(slot2Box, route, dateISO, info, null, 2);
+      container.appendChild(slot2Box);
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "link-btn";
+      cancelBtn.textContent = "Anuluj dodawanie drugiego kuriera";
+      cancelBtn.style.marginTop = "6px";
+      cancelBtn.addEventListener("click", () => {
+        secondSlotOpen.delete(key);
+        refreshRouteCardInPlace(route);
+      });
+      container.appendChild(cancelBtn);
+    } else {
+      const addBtn = document.createElement("button");
+      addBtn.className = "add-second-btn";
+      addBtn.textContent = "+ Dodaj drugiego kuriera";
+      addBtn.addEventListener("click", () => {
+        secondSlotOpen.add(key);
+        refreshRouteCardInPlace(route);
+      });
+      container.appendChild(addBtn);
+    }
+  }
+}
+
+function renderCourierSlot(slot, route, dateISO, info, declared, slotNum) {
   slot.innerHTML = "";
 
   if (declared) {
@@ -733,10 +875,13 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
     btn.className = "remove-btn";
     btn.textContent = "✕";
     btn.disabled = !BACKEND_OK;
-    btn.addEventListener("click", () => optimisticRemoveDeclaration(route, dateISO));
+    btn.addEventListener("click", () => {
+      if (slotNum === 2) secondSlotOpen.delete(declKey(route, dateISO));
+      optimisticRemoveDeclaration(route, dateISO, slotNum);
+    });
     box.appendChild(btn);
     slot.appendChild(box);
-    if (isSwap) {
+    if (isSwap && slotNum === 1) {
       const note = document.createElement("div");
       note.style.cssText = "font-size:11px;color:#6A2E9E;margin-top:5px;";
       note.textContent = `Normalnie ta trasa jest obsługiwana przez: ${carrierDisplayName(route, info.carriers)}.`;
@@ -753,7 +898,7 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
   }
 
   const quickOptions = couriersForCarriers(info.carriers);
-  const swapKey = declKey(route, dateISO);
+  const swapKey = declKey(route, dateISO) + "::" + slotNum;
   const isSwapOpen = swapSearchOpen.has(swapKey);
 
   const quickSelect = document.createElement("select");
@@ -781,7 +926,7 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
       courierNr: opt.nr,
       courierName: `${opt.imie} ${opt.nazwisko}`,
       carrier: opt.carrier,
-    });
+    }, slotNum);
   });
   slot.appendChild(quickSelect);
 
@@ -839,7 +984,7 @@ function renderCourierSlot(slot, route, dateISO, info, declared) {
             courierNr: m.nr,
             courierName: `${m.imie} ${m.nazwisko}`,
             carrier: m.carrier,
-          });
+          }, slotNum);
         });
         resultsBox.appendChild(row);
       });
@@ -863,7 +1008,8 @@ function renderHistory() {
     const [route, date] = key.split("__");
     if (date >= today) return;
     if (!byDate[date]) byDate[date] = [];
-    byDate[date].push({ route, ...val });
+    const secondVal = DECLARATIONS2[key];
+    byDate[date].push({ route, ...val, second: secondVal || null });
   });
 
   const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
@@ -899,7 +1045,8 @@ function renderHistory() {
       entries.forEach((e) => {
         const row = document.createElement("div");
         row.className = "history-row";
-        row.innerHTML = `<span><strong style="color:var(--purple)">Trasa ${escapeHTML(e.route)}</strong> — ${escapeHTML(e.courierName)} (${escapeHTML(e.courierNr)})</span>`;
+        const names = e.courierName + (e.second ? ` + ${e.second.courierName}` : "");
+        row.innerHTML = `<span><strong style="color:var(--purple)">Trasa ${escapeHTML(e.route)}</strong> — ${escapeHTML(names)}</span>`;
         body.appendChild(row);
       });
 
@@ -928,12 +1075,14 @@ function renderHistory() {
 function buildWhatsAppText(dateISO) {
   const entries = Object.entries(DECLARATIONS)
     .filter(([k]) => k.endsWith("__" + dateISO))
-    .map(([k, v]) => ({ route: k.split("__")[0], ...v }))
+    .map(([k, v]) => ({ route: k.split("__")[0], ...v, second: DECLARATIONS2[k] || null }))
     .sort((a, b) => a.route.localeCompare(b.route));
 
   const lines = [`*Trasy Weekendowe — sobota ${fmtDatePL(dateISO)}*`, ""];
   entries.forEach((e) => {
-    lines.push(`Trasa ${e.route} — ${e.courierName} (${e.courierNr})`);
+    const names = e.courierName + (e.second ? ` + ${e.second.courierName}` : "");
+    const nrs = e.courierNr + (e.second ? ` / ${e.second.courierNr}` : "");
+    lines.push(`Trasa ${e.route} — ${names} (${nrs})`);
   });
   return lines.join("\n");
 }
@@ -942,7 +1091,7 @@ function renderSummary() {
   const dateISO = dateInput.value;
   const entries = Object.entries(DECLARATIONS)
     .filter(([k]) => k.endsWith("__" + dateISO))
-    .map(([k, v]) => ({ route: k.split("__")[0], ...v }));
+    .map(([k, v]) => ({ route: k.split("__")[0], ...v, second: DECLARATIONS2[k] || null }));
 
   if (entries.length === 0) {
     declaredSummary.classList.add("hidden");
@@ -956,14 +1105,16 @@ function renderSummary() {
   entries
     .sort((a, b) => a.route.localeCompare(b.route))
     .forEach((d) => {
+      const names = d.courierName + (d.second ? ` + ${d.second.courierName}` : "");
+      const nrs = d.courierNr + (d.second ? ` / ${d.second.courierNr}` : "");
       const row = document.createElement("div");
       row.className = "summary-row";
       row.innerHTML = `
-        <span><span class="summary-route">Trasa ${escapeHTML(d.route)}</span> — ${escapeHTML(d.courierName)} (${escapeHTML(d.courierNr)})</span>
+        <span><span class="summary-route">Trasa ${escapeHTML(d.route)}</span> — ${escapeHTML(names)} (${escapeHTML(nrs)})</span>
       `;
       const btn = document.createElement("button");
       btn.className = "remove-btn";
-      btn.addEventListener("click", () => optimisticRemoveDeclaration(d.route, dateISO));
+      btn.addEventListener("click", () => optimisticRemoveDeclaration(d.route, dateISO, 1));
       btn.textContent = "✕";
       row.appendChild(btn);
       declaredListEl.appendChild(row);
@@ -1002,6 +1153,271 @@ function renderSummary() {
     }
   });
   waRow.appendChild(copyBtn);
+}
+
+// -------------------------------------------------------------
+// DOPLATY: upload prowizji, stawki dniowki, obliczenia, historia
+// -------------------------------------------------------------
+
+function parseCommissionWorkbook(workbook) {
+  const sheetName = workbook.SheetNames.includes("data") ? "data" : workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  if (raw.length === 0) return [];
+
+  const header = raw[0].map((h) => String(h).trim().toLowerCase());
+  const idxNr = header.findIndex((h) => h.includes("numer"));
+  const idxImie = header.findIndex((h) => h === "imię" || h.includes("imie"));
+  const idxNazwisko = header.findIndex((h) => h.includes("nazwisko"));
+  const idxFirma = header.findIndex((h) => h.includes("firma"));
+  const idxPure = header.findIndex((h) => h.includes("pure"));
+
+  const rows = [];
+  for (let i = 1; i < raw.length; i++) {
+    const r = raw[i];
+    const nr = idxNr >= 0 ? String(r[idxNr] || "").trim() : "";
+    if (!nr) continue; // pomijamy wiersze bez numeru SLU (np. zbiorcze InPost NFK)
+    rows.push({
+      nr,
+      imie: idxImie >= 0 ? String(r[idxImie] || "").trim() : "",
+      nazwisko: idxNazwisko >= 0 ? String(r[idxNazwisko] || "").trim() : "",
+      carrier: idxFirma >= 0 ? String(r[idxFirma] || "").trim() : "",
+      pureSum: idxPure >= 0 ? Number(r[idxPure]) || 0 : 0,
+    });
+  }
+  return rows;
+}
+
+function handleCommissionFileSelected(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const dateISO = dateInput.value;
+
+  const reader = new FileReader();
+  reader.onload = async (ev) => {
+    try {
+      const data = new Uint8Array(ev.target.result);
+      const workbook = XLSX.read(data, { type: "array" });
+      const rows = parseCommissionWorkbook(workbook);
+      if (rows.length === 0) {
+        alert("Nie znaleziono żadnych wierszy z numerem kuriera w pliku. Sprawdź czy to właściwy plik.");
+        return;
+      }
+      showToast("💾 Wgrywanie…", "info", 4000);
+      const resp = await apiPost("commissions", { date: dateISO, rows, fileName: file.name });
+      COMMISSIONS = resp.data || COMMISSIONS;
+      vibrate(VIBRATE_OK);
+      showToast(`✅ Wgrano ${rows.length} wierszy`, "success");
+      renderDoplaty();
+      renderDoplatyHistory();
+    } catch (err) {
+      vibrate(VIBRATE_ERROR);
+      showToast("⚠️ Błąd wgrywania", "error", 3000);
+      alert("Nie udało się przetworzyć/zapisać pliku: " + err.message);
+    } finally {
+      commissionFileInput.value = "";
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function saveDniowkaRates() {
+  const rates = {};
+  ratesGrid.querySelectorAll("input[data-route]").forEach((inp) => {
+    const val = parseFloat(inp.value);
+    if (!isNaN(val)) rates[inp.dataset.route] = val;
+  });
+  ratesSaveBtn.disabled = true;
+  showToast("💾 Zapisywanie stawek…", "info", 4000);
+  try {
+    const resp = await apiPost("dniowka-rates", { rates });
+    DNIOWKA_RATES = resp.data || rates;
+    vibrate(VIBRATE_OK);
+    showToast("✅ Zapisano stawki", "success");
+    renderDoplaty();
+    renderDoplatyHistory();
+  } catch (err) {
+    vibrate(VIBRATE_ERROR);
+    showToast("⚠️ Nie zapisano stawek", "error", 3000);
+    alert("Nie udało się zapisać stawek: " + err.message);
+  }
+  ratesSaveBtn.disabled = false;
+}
+
+function renderRatesGrid() {
+  ratesGrid.innerHTML = "";
+  ALL_ROUTES.forEach((route) => {
+    const field = document.createElement("div");
+    field.className = "rate-field";
+    field.innerHTML = `<span class="route-badge-sm">${route}</span>`;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "1";
+    input.dataset.route = route;
+    input.value = DNIOWKA_RATES[route] != null ? DNIOWKA_RATES[route] : "";
+    input.placeholder = "—";
+    field.appendChild(input);
+    ratesGrid.appendChild(field);
+  });
+}
+
+/**
+ * Oblicza doplaty dla wybranej daty na podstawie aktualnych DECLARATIONS/
+ * DECLARATIONS2, prowizji z COMMISSIONS[dateISO] i stawek DNIOWKA_RATES.
+ */
+function computeDoplatyForDate(dateISO) {
+  const commissionEntry = COMMISSIONS[dateISO];
+  const pureByNr = {};
+  if (commissionEntry) {
+    commissionEntry.rows.forEach((r) => {
+      pureByNr[r.nr] = r.pureSum;
+    });
+  }
+
+  const results = [];
+  ALL_ROUTES.forEach((route) => {
+    const key = declKey(route, dateISO);
+    const p1 = DECLARATIONS[key];
+    if (!p1) return; // tylko trasy z zadeklarowanym kurierem
+    const p2 = DECLARATIONS2[key];
+
+    const dniowka = DNIOWKA_RATES[route];
+    const pure1 = pureByNr[p1.courierNr];
+    const pure2 = p2 ? pureByNr[p2.courierNr] : 0;
+
+    let status, doplata = null, totalPure = null;
+    if (!commissionEntry) {
+      status = "no-file";
+    } else if (pure1 === undefined || (p2 && pure2 === undefined)) {
+      status = "missing-courier";
+    } else if (dniowka == null) {
+      status = "no-rate";
+    } else {
+      totalPure = pure1 + (pure2 || 0);
+      doplata = Math.max(0, dniowka - totalPure);
+      status = "ok";
+    }
+
+    results.push({ route, p1, p2, dniowka, pure1, pure2, totalPure, doplata, status });
+  });
+
+  return results;
+}
+
+function renderDoplaty() {
+  const dateISO = dateInput.value;
+  doplatyDateLabel.textContent = fmtDatePL(dateISO);
+
+  const commissionEntry = COMMISSIONS[dateISO];
+  if (commissionEntry) {
+    commissionStatus.className = "commission-status ok";
+    commissionStatus.textContent = `✅ Wgrano ${commissionEntry.rows.length} wierszy (${commissionEntry.fileName || "plik"}) — ${new Date(commissionEntry.uploadedAt).toLocaleString("pl-PL")}`;
+  } else {
+    commissionStatus.className = "commission-status";
+    commissionStatus.textContent = "Brak wgranego pliku prowizji dla tej soboty.";
+  }
+
+  const results = computeDoplatyForDate(dateISO);
+  doplatyTable.innerHTML = "";
+  doplatyEmpty.classList.toggle("hidden", results.length > 0);
+
+  results.forEach((r) => {
+    doplatyTable.appendChild(buildDoplataCard(r));
+  });
+}
+
+function buildDoplataCard(r) {
+  const card = document.createElement("div");
+  card.className = "doplata-card";
+
+  const names = r.p1.courierName + (r.p2 ? ` + ${r.p2.courierName}` : "");
+
+  let amountHTML, breakdownHTML;
+  if (r.status === "no-file") {
+    amountHTML = `<span class="doplata-amount missing">brak pliku</span>`;
+    breakdownHTML = "Wgraj plik prowizji dla tej soboty, aby policzyć dopłatę.";
+  } else if (r.status === "missing-courier") {
+    amountHTML = `<span class="doplata-amount missing">brak danych</span>`;
+    breakdownHTML = "Kuriera nie znaleziono w pliku prowizji — sprawdź numer SLU.";
+  } else if (r.status === "no-rate") {
+    amountHTML = `<span class="doplata-amount missing">brak stawki</span>`;
+    breakdownHTML = "Ustaw stawkę dniówki dla tej trasy w sekcji „⚙️ Stawki dniówki”.";
+  } else {
+    const cls = r.doplata > 0 ? "positive" : "zero";
+    amountHTML = `<span class="doplata-amount ${cls}">${r.doplata.toFixed(2)} zł</span>`;
+    const pureText = r.p2 != null && r.pure2 !== undefined
+      ? `PURE: ${r.pure1.toFixed(2)} + ${r.pure2.toFixed(2)} = ${r.totalPure.toFixed(2)} zł`
+      : `PURE: ${r.pure1.toFixed(2)} zł`;
+    breakdownHTML = `${pureText} · Dniówka: ${r.dniowka.toFixed(2)} zł`;
+  }
+
+  card.innerHTML = `
+    <div class="doplata-head">
+      <span class="route-badge-lg">${r.route}</span>
+      <div class="doplata-info">
+        <div class="doplata-couriers">${escapeHTML(names)}</div>
+        <div class="doplata-breakdown">${breakdownHTML}</div>
+      </div>
+      ${amountHTML}
+    </div>
+  `;
+  return card;
+}
+
+function renderDoplatyHistory() {
+  const today = todayISO();
+  const pastDates = Object.keys(COMMISSIONS)
+    .filter((d) => d < today)
+    .sort((a, b) => b.localeCompare(a));
+
+  doplatyHistoryEl.innerHTML = "";
+  doplatyHistoryEmpty.classList.toggle("hidden", pastDates.length > 0);
+
+  pastDates.forEach((date) => {
+    const key = `doplaty-hist::${date}`;
+    const isOpen = sectionState.get(key) || false;
+    const results = computeDoplatyForDate(date).filter((r) => r.status === "ok" || r.status === "missing-courier");
+
+    const card = document.createElement("div");
+    card.className = "history-card";
+
+    const head = document.createElement("div");
+    head.className = "history-head";
+    head.innerHTML = `
+      <div>
+        <div class="history-date">Sobota ${fmtDatePL(date)}</div>
+        <div class="history-count">${results.length} ${results.length === 1 ? "trasa" : "tras"} rozliczonych</div>
+      </div>
+      <span class="chevron ${isOpen ? "open" : ""}">▶</span>
+    `;
+    head.addEventListener("click", () => {
+      sectionState.set(key, !isOpen);
+      renderDoplatyHistory();
+    });
+
+    const body = document.createElement("div");
+    body.className = `history-body ${isOpen ? "" : "hidden"}`;
+    if (isOpen) {
+      results.forEach((r) => {
+        const row = document.createElement("div");
+        row.className = "history-row";
+        const names = r.p1.courierName + (r.p2 ? ` + ${r.p2.courierName}` : "");
+        const doplataText = r.status === "ok" ? `${r.doplata.toFixed(2)} zł` : "brak danych";
+        row.innerHTML = `<span><strong style="color:var(--purple)">Trasa ${escapeHTML(r.route)}</strong> — ${escapeHTML(names)}</span><span>${doplataText}</span>`;
+        body.appendChild(row);
+      });
+      if (results.length === 0) {
+        const none = document.createElement("div");
+        none.style.cssText = "font-size:12px;color:#9186A0;padding:8px 0;";
+        none.textContent = "Brak danych do rozliczenia dla tej soboty.";
+        body.appendChild(none);
+      }
+    }
+
+    card.appendChild(head);
+    card.appendChild(body);
+    doplatyHistoryEl.appendChild(card);
+  });
 }
 
 // -------------------------------------------------------------

@@ -15,8 +15,10 @@ netlify.toml            – konfiguracja Netlify (katalog funkcji)
 package.json            – zależność @netlify/blobs dla funkcji
 icons/                   – ikony aplikacji
 netlify/functions/
-  declarations.js         – API: deklaracje kurierów (GET/POST/DELETE)
+  declarations.js         – API: deklaracje kurierów, slot 1 i 2 (GET/POST/DELETE)
   rotation-overrides.js   – API: zamiany kolejności rotacji (GET/POST/DELETE)
+  commissions.js          – API: prowizje PURE per sobota, historia (GET/POST/DELETE)
+  dniowka-rates.js        – API: stawki dniówki per trasa (GET/POST)
 data/
   addresses.json         – 285 adresów/APM z Trasy_WKN_CZERWIEC_2026.xlsx
   couriers.json            – kurierzy pogrupowani wg przewoźnika
@@ -42,6 +44,37 @@ Wymaga wdrożenia na Netlify z aktywnymi Functions.
 3. Environment variables → `WEEKEND_APP_PASSWORD` (hasło do zapisu,
    wpisywane też w apce w sekcji „🔒 Ustawienia").
 4. Trigger deploy → Clear cache and deploy site.
+
+## Zakładka „💰 Dopłaty" (nowość)
+
+Automatyczne wyliczanie dopłaty do dniówki na podstawie kurierów
+zadeklarowanych na trasy.
+
+**Zasada**: `Dopłata = max(0, Dniówka trasy − suma prowizji PURE kurierów na tej trasie)`.
+Jeśli prowizja PURE ≥ dniówka, dopłata wynosi 0.
+
+**Jak korzystać co tydzień:**
+1. Wgraj plik `.xlsx` z prowizjami (przycisk „📤 Wgraj plik prowizji")
+   — kolumny: Numer, Imię, Nazwisko, Firma, Suma prowizji z PURE
+   SYSTEMU. Plik dotyczy **wybranej w apce soboty** — wgrywaj go po
+   ustawieniu właściwej daty na górze.
+2. Stawki dniówki per trasa ustawiasz raz w sekcji „⚙️ Stawki
+   dniówki" (edytowalne, zapisywane na serwerze, chronione hasłem).
+3. Tabela dopłat liczy się automatycznie dla wszystkich tras z
+   zadeklarowanym kurierem. Kurier nieznaleziony w pliku prowizji
+   (np. literówka w numerze SLU) pokazuje „brak danych" zamiast
+   błędnej kwoty.
+4. **Historia dopłat** — każdy tydzień zostaje zapisany na stałe
+   (jak Historia deklaracji), nic się nie nadpisuje. Uwaga: przy
+   przeliczaniu historycznych sobót używane są **aktualne** stawki
+   dniówki, nie te sprzed zmiany (stawki nie mają własnej historii).
+
+**Drugi kurier na trasie** — pod zadeklarowanym kurierem pojawia się
+„+ Dodaj drugiego kuriera" (widoczne tylko dopóki drugi slot jest
+pusty). Gdy trasę obsługuje dwóch kurierów, ich prowizje sumują się
+przy liczeniu dopłaty (bez podziału — jedna łączna kwota, rozdzielana
+ręcznie), a obaj widoczni są wszędzie: w nagłówku trasy, podsumowaniu,
+historii, eksporcie WhatsApp i w tabeli dopłat.
 
 ## Baza kurierów — aktualizacja 02.09.2026
 
