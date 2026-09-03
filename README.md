@@ -13,13 +13,10 @@ style.css            – style
 app.js                – logika (wyszukiwanie, rotacja, deklaracje, dopłaty, historia)
 manifest.json          – manifest PWA (ikona, nazwa, kolor)
 service-worker.js      – cache / działanie offline
-wrangler.toml           – konfiguracja Cloudflare (binding KV, pomocnicza przy CLI)
+worker.js               – Cloudflare Worker: routing /api/* + statyczne pliki
+wrangler.toml            – konfiguracja Workera (assets, KV binding)
+.assetsignore             – wyklucza worker.js/wrangler.toml z publicznego serwowania
 icons/                   – ikony aplikacji
-functions/api/
-  declarations.js         – API: deklaracje kurierów, slot 1 i 2 (GET/POST/DELETE)
-  rotation-overrides.js   – API: zamiany kolejności rotacji (GET/POST/DELETE)
-  commissions.js          – API: prowizje PURE per sobota, historia (GET/POST/DELETE)
-  dniowka-rates.js        – API: stawki dniówki per trasa (GET/POST)
 data/
   addresses.json         – 285 adresów/APM z Trasy_WKN_CZERWIEC_2026.xlsx
   couriers.json            – kurierzy pogrupowani wg przewoźnika
@@ -33,49 +30,58 @@ data/
 Deklaracje, zamiany rotacji, prowizje i stawki dniówki trafiają do
 jednego namespace'u Workers KV, z osobnym kluczem per wpis (prefiksy
 `decl:`, `rot:`, `comm:`, `rates:`) — dzięki temu równoczesne zapisy
-różnych tras nigdy się nie nadpisują. Wymaga wdrożenia na Cloudflare
-Pages z podpiętym bindingiem KV — nic nie zadziała z lokalnego
-podglądu bez tego bindingu.
+różnych tras nigdy się nie nadpisują.
 
-## Wdrożenie na Cloudflare Pages
+## Wdrożenie — jeden Worker (statyczne pliki + API)
+
+Cloudflare od 2026 r. zaleca dla nowych projektów **Workers ze
+statycznymi zasobami** zamiast osobnego produktu Pages (Pages nadal
+działa dla istniejących projektów, ale nie jest już domyślną ścieżką
+dla nowych). Ta apka używa jednego Workera (`worker.js`), który
+serwuje zarówno pliki statyczne (przez binding `ASSETS`), jak i
+endpointy `/api/*`.
 
 ### 1. Utwórz namespace Workers KV
-Cloudflare dashboard → **Workers & Pages** → **KV** → **Create a
-namespace**. Nazwij np. `weekend-app-kv`. Zapisz sobie jego ID (widać
-na liście po utworzeniu) — przyda się w kroku 4 (opcjonalnie, do
-`wrangler.toml`).
+**Workers & Pages** → **Storage & databases** → **Workers KV** →
+**Create Instance**. Nazwij np. `WKND`. Skopiuj jego **ID** — będzie
+potrzebne w kroku 3.
 
-### 2. Utwórz projekt Pages
-**Workers & Pages** → **Create application** → **Pages** → **Connect
-to Git** → wybierz repo. Ustawienia builda:
-- **Build command**: (puste — to statyczna strona, nic nie trzeba budować)
-- **Build output directory**: `weekend-app` (jeśli cała reszta repo
-  to inne projekty, jak w Twoim przypadku) albo `.` jeśli repo
-  zawiera tylko ten projekt.
-- Cloudflare **automatycznie wykryje** folder `functions/` w katalogu
-  output i wdroży je jako Pages Functions — nic więcej nie trzeba
-  konfigurować w tej kwestii.
+### 2. Uzupełnij `wrangler.toml`
+W tym pliku w repo, w sekcji `[[kv_namespaces]]`, wklej prawdziwe ID
+namespace'u z kroku 1 w miejsce `TU_WKLEJ_ID_NAMESPACE_KV`.
 
-### 3. Podepnij KV do projektu
-Po pierwszym deployu: projekt Pages → **Settings** → **Functions** →
-**KV namespace bindings** → **Add binding**:
-- Variable name: **`WEEKEND_KV`** (dokładnie taka nazwa — kod jej szuka)
-- KV namespace: wybierz `weekend-app-kv` utworzony w kroku 1
+### 3. Podłącz repo jako Worker
+**Workers & Pages** → **Create application** → wybierz opcję importu
+z repozytorium Git (np. „Import a repository” / „Connect to Git” —
+dokładna nazwa przycisku może się różnić, bo Cloudflare cały czas
+zmienia ten ekran). Wskaż swoje repo. Jeśli panel pyta o katalog
+źródłowy (root directory) — ustaw `weekend-app`. Cloudflare powinien
+sam wykryć `wrangler.toml` i użyć komendy `wrangler deploy`.
 
 ### 4. Ustaw hasło do zapisu
-Tam samo (**Settings** → **Environment variables**) → **Add variable**:
-- Variable name: **`WEEKEND_APP_PASSWORD`**
-- Value: dowolne hasło — to samo wpisujesz potem w apce w sekcji
-  „🔒 Ustawienia"
+Po utworzeniu Workera: **Settings** → **Variables and Secrets** →
+**Add** → Type: **Secret** (albo zwykła zmienna, jeśli nie ma opcji
+Secret) → Name: **`WEEKEND_APP_PASSWORD`**, Value: dowolne hasło.
 
-### 5. Redeploy
-Po dodaniu bindingu i zmiennej środowiskowej zrób **Retry deployment**
-(binding/env var działają dopiero od następnego deployu, nie
-retroaktywnie na już wdrożoną wersję).
+### 5. Sprawdź binding KV
+**Settings** → **Bindings** — powinien tam już być `WEEKEND_KV`
+wzięty z `wrangler.toml` (krok 2). Jeśli go nie ma, dodaj ręcznie:
+**Add binding** → **KV namespace** → Variable name: `WEEKEND_KV` →
+wybierz namespace z kroku 1.
 
-Jeśli wolisz wdrażać z linii komend zamiast przez Git: `wrangler.toml`
-w tym folderze ma już sekcję `[[kv_namespaces]]` — wklej tam ID
-namespace'u z kroku 1, potem `wrangler pages deploy weekend-app`.
+### 6. Redeploy
+Jeśli dodawałeś/zmieniałeś coś w kroku 4-5 już po pierwszym
+deployu — zrób ponowny deploy (Deployments → Retry deployment),
+zmienne/bindingi działają dopiero od następnego builda.
+
+Adres Workera to zwykle `nazwa-projektu.<twoj-subdomain>.workers.dev`
+(widoczny na górze strony projektu).
+
+Jeśli wdrażasz z linii komend zamiast przez Git:
+```
+npx wrangler deploy
+```
+uruchomione w folderze `weekend-app` (wymaga zalogowania: `npx wrangler login`).
 
 ## Zakładka „💰 Dopłaty"
 

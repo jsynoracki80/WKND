@@ -1,0 +1,17 @@
+# Konfiguracja Cloudflare Worker dla "Trasy Weekendowe".
+# Jeden Worker obsluguje statyczne pliki (binding ASSETS) oraz
+# endpointy /api/* (logika w worker.js). Magazyn danych: Workers KV.
+
+name = "trasy-weekendowe"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "./"
+binding = "ASSETS"
+not_found_handling = "404-page"
+run_worker_first = ["/api/*"]
+
+[[kv_namespaces]]
+binding = "WEEKEND_KV"
+id = "03733c9a272c435d9f5e63c2eef3c2c4"
