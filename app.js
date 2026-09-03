@@ -1,7 +1,7 @@
 // =============================================================
 // Trasy Weekendowe — logika aplikacji
 // © 2026 Jacek Synoracki — Oddział Słupsk
-// Dane deklaracji/rotacji/prowizji: Netlify Functions + Blobs.
+// Dane deklaracji/rotacji/prowizji: Cloudflare Pages Functions + Workers KV.
 // =============================================================
 
 const ALL_ROUTES = ["A","B","C","D","F","G","J","K","M","N","P","Q","S","T","U","V","W","X"];
@@ -40,7 +40,7 @@ const CARRIER_ABBREV = {
   "POLTRANS Dominika Underlich": "Poltrans",
 };
 
-const API_BASE = "/.netlify/functions";
+const API_BASE = "/api";
 const PASSWORD_STORAGE_KEY = "trasy_weekendowe_haslo_v1";
 const SEARCH_DEBOUNCE_MS = 200;
 
@@ -243,7 +243,7 @@ function buildKnownCities() {
 }
 
 // -------------------------------------------------------------
-// Backend (Netlify Functions + Blobs)
+// Backend (Cloudflare Pages Functions + Workers KV)
 // -------------------------------------------------------------
 
 function splitDeclarations(raw) {
